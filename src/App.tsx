@@ -3,11 +3,13 @@ import { Game, type PublicState, setBestCache, getBestCache } from './game/engin
 import { render } from './game/render';
 import { sfx } from './game/sfx';
 import { loadScores, loadMuted, saveMuted, loadBest, type ScoreRow } from './game/storage';
+import { loadMeta, saveMeta, buildStartConfig, type Meta } from './game/meta';
 import { StartScreen, LevelUpScreen, PauseScreen, GameOverScreen, DashButton } from './ui/Screens';
+import { ShopModal } from './ui/Shop';
 
 const INITIAL: PublicState = {
   phase: 'menu', score: 0, best: 0, level: 1, kills: 0, time: 0, hp: 100, maxHp: 100,
-  shapeId: 'circle', weapons: ['disc'], choices: [], rerolls: 0, wave: 1, combo: 0, owned: {}, paused: false,
+  shapeId: 'circle', weapons: ['disc'], choices: [], rerolls: 0, wave: 1, combo: 0, owned: {}, paused: false, coinsEarned: 0,
 };
 
 export default function App() {
@@ -21,6 +23,10 @@ export default function App() {
   const [scores, setScores] = useState<ScoreRow[]>(() => loadScores());
   const [muted, setMuted] = useState<boolean>(() => loadMuted());
   const [highlight, setHighlight] = useState(-1);
+  const [meta, setMeta] = useState<Meta>(() => loadMeta());
+  const [shopOpen, setShopOpen] = useState(false);
+  const metaRef = useRef<Meta>(meta);
+  metaRef.current = meta;
 
   /* ---------------- boot: game + loop + input ---------------- */
   useEffect(() => {
@@ -34,6 +40,13 @@ export default function App() {
           const rows = loadScores();
           setScores(rows);
           setHighlight(rows.findIndex((r) => r.score === s.score && r.time === s.time && r.kills === s.kills));
+          if (s.coinsEarned > 0) {
+            setMeta((prev) => {
+              const nm = { ...prev, coins: prev.coins + s.coinsEarned };
+              saveMeta(nm);
+              return nm;
+            });
+          }
         } else if (s.phase === 'menu') {
           setScores(loadScores());
         }
@@ -41,6 +54,7 @@ export default function App() {
       setSt(s);
     });
     gameRef.current = g;
+    g.applyMeta(buildStartConfig(metaRef.current));
     sfx.setMuted(loadMuted());
 
     let raf = 0;
@@ -143,8 +157,20 @@ export default function App() {
     sfx.resume();
     sfx.select();
     setHighlight(-1);
-    gameRef.current?.reset();
+    const g = gameRef.current;
+    if (g) { g.applyMeta(buildStartConfig(metaRef.current)); g.reset(); }
   }, []);
+
+  const updateMeta = useCallback((m: Meta) => {
+    saveMeta(m);
+    setMeta(m);
+    // live-apply cosmetics so the menu reflects the choice immediately
+    const g = gameRef.current;
+    if (g) { g.applyMeta(buildStartConfig(m)); g.push(); }
+  }, []);
+
+  const openShop = useCallback(() => { sfx.resume(); sfx.select(); setShopOpen(true); }, []);
+  const closeShop = useCallback(() => { setShopOpen(false); }, []);
 
   const resume = useCallback(() => { sfx.select(); gameRef.current?.resume(); }, []);
   const pause = useCallback(() => { sfx.select(); gameRef.current?.pause(); }, []);
@@ -200,7 +226,12 @@ export default function App() {
 
       {st.phase === 'playing' && <DashButton onPress={dash} ringRef={dashRing} fillRef={dashFill} />}
 
-      {st.phase === 'menu' && <StartScreen best={getBestCache()} scores={scores} onPlay={play} />}
+      {st.phase === 'menu' && !shopOpen && (
+        <StartScreen best={getBestCache()} scores={scores} coins={meta.coins} onPlay={play} onShop={openShop} />
+      )}
+      {st.phase === 'menu' && shopOpen && (
+        <ShopModal meta={meta} onChange={updateMeta} onClose={closeShop} />
+      )}
       {st.phase === 'levelup' && <LevelUpScreen st={st} onPick={pick} onReroll={reroll} />}
       {st.phase === 'paused' && <PauseScreen st={st} onResume={resume} onRestart={play} onQuit={quit} />}
       {st.phase === 'dead' && (

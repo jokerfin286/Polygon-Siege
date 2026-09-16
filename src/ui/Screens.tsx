@@ -43,7 +43,7 @@ function ShapeGlyph({ id, size = 22 }: { id: string; size?: number }) {
 
 /* ------------------------------------------------------- */
 
-export function StartScreen({ best, scores, onPlay }: { best: number; scores: ScoreRow[]; onPlay: () => void }) {
+export function StartScreen({ best, scores, coins, onPlay, onShop }: { best: number; scores: ScoreRow[]; coins: number; onPlay: () => void; onShop: () => void }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); onPlay(); }
@@ -77,6 +77,18 @@ export function StartScreen({ best, scores, onPlay }: { best: number; scores: Sc
               {best > 0 ? `BEST ${best.toLocaleString()}` : 'FIRST RUN'}
             </span>
           </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onShop}
+              className="flex items-center gap-2 rounded-2xl border border-amber-400/40 bg-amber-400/10 px-5 py-2.5 font-display text-sm font-bold tracking-widest text-amber-200 transition active:scale-95 hover:bg-amber-400/20"
+            >
+              🛒 ARMORY
+            </button>
+            <div className="flex items-center gap-1.5 rounded-2xl border border-white/10 bg-black/30 px-4 py-2.5">
+              <span className="text-base">🪙</span>
+              <span className="tnum font-display text-sm font-bold text-amber-300">{coins.toLocaleString()}</span>
+            </div>
+          </div>
           <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
             <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">WASD</kbd> / <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">↑↓←→</kbd> move</span>
             <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">SPACE</kbd> dash</span>
@@ -303,6 +315,12 @@ export function GameOverScreen({ st, scores, onRestart, onQuit, highlight }: {
           <h2 className="font-display anim-slam mt-1 text-3xl font-black text-rose-400 sm:text-4xl">SHATTERED</h2>
           <div className="mt-4 font-display text-5xl font-black tnum text-white">{st.score.toLocaleString()}</div>
           <div className="text-[10px] tracking-[0.3em] text-slate-500">FINAL SCORE</div>
+          {st.coinsEarned > 0 && (
+            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1">
+              <span className="text-sm">🪙</span>
+              <span className="tnum font-display text-sm font-bold text-amber-300">+{st.coinsEarned.toLocaleString()} coins earned</span>
+            </div>
+          )}
           {isRecord && (
             <div className="mt-2 inline-block rounded-full border border-amber-400/50 bg-amber-400/15 px-3 py-1 font-display text-[10px] tracking-[0.25em] text-amber-300">
               ★ NEW PERSONAL BEST

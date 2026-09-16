@@ -77,6 +77,8 @@ async function main() {
       picks++;
       const scoreC = (k: any) => {
         const id = k.def.id;
+        if (id === 'chainhit') return 999;
+        if (id === 'explode' || id === 'deathbomb') return 300;
         if (k.def.kind === 'weapon') return 100;
         if (['dmg', 'rate', 'multi', 'critd', 'pierce', 'crit', 'wslot'].includes(id)) return 80;
         if (k.def.kind === 'shape') return 70;

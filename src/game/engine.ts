@@ -5,6 +5,7 @@ import {
 import { FX } from './fx';
 import { sfx } from './sfx';
 import { saveScore, saveBest, type ScoreRow } from './storage';
+import { THEMES, type ThemeDef, type StartConfig } from './meta';
 
 export type Phase = 'menu' | 'playing' | 'paused' | 'levelup' | 'dead';
 
@@ -63,6 +64,7 @@ export interface PublicState {
   combo: number;
   owned: Record<string, number>;
   paused: boolean;
+  coinsEarned: number;
 }
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
@@ -83,6 +85,17 @@ export class Game {
   ctx: CanvasRenderingContext2D;
   fx = new FX();
   W = 800; H = 600; dpr = 1;
+  // world (arena) can be larger than the viewport; a camera follows the player
+  worldW = 1200; worldH = 900;
+  camX = 0; camY = 0; viewScale = 1;
+
+  // meta-progression config applied at run start
+  startMods: Record<string, number> = {};
+  bonusRerolls = 0;
+  coinMul = 1;
+  coinsEarned = 0;
+  playerColor: string | null = null;
+  theme: ThemeDef = THEMES[0];
 
   phase: Phase = 'menu';
   onState: (s: PublicState) => void;
@@ -157,21 +170,55 @@ export class Game {
     };
   }
 
+  applyMeta(cfg: StartConfig) {
+    this.startMods = { ...cfg.mods };
+    this.bonusRerolls = cfg.bonusRerolls;
+    this.coinMul = cfg.coinMul;
+    this.playerColor = cfg.color;
+    this.theme = cfg.theme;
+  }
+
   resize() {
     const c = this.canvas;
     const rect = c.getBoundingClientRect();
     const w = Math.max(320, Math.round(rect.width || window.innerWidth));
     const h = Math.max(320, Math.round(rect.height || window.innerHeight));
-    if (this.W === w && this.H === h && this.canvas.width === Math.floor(w * this.dpr)) return;
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    if (this.W === w && this.H === h && this.canvas.width === Math.floor(w * this.dpr)) return;
     c.width = Math.floor(w * this.dpr);
     c.height = Math.floor(h * this.dpr);
     this.W = w; this.H = h;
+
+    // Zoom out on small screens so there is room to manoeuvre; the world is
+    // always noticeably larger than the visible slice and a camera follows you.
+    const smallSide = Math.min(w, h);
+    const zoom = clamp(smallSide / 900, 0.6, 1);
+    this.viewScale = zoom;
+    const viewW = w / zoom, viewH = h / zoom;
+    this.worldW = Math.round(Math.max(1200, viewW * 1.85));
+    this.worldH = Math.round(Math.max(900, viewH * 1.85));
+
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.stars = [];
-    const n = Math.floor((w * h) / 9000);
+    const n = Math.floor((w * h) / 8500);
     for (let i = 0; i < n; i++) this.stars.push({ x: Math.random() * w, y: Math.random() * h, z: rnd(0.3, 1) });
-    this.px = clamp(this.px, 30, w - 30); this.py = clamp(this.py, 30, h - 30);
+    this.px = clamp(this.px, 30, this.worldW - 30); this.py = clamp(this.py, 30, this.worldH - 30);
+    this.centerCamera();
+  }
+
+  private centerCamera() {
+    const viewW = this.W / this.viewScale, viewH = this.H / this.viewScale;
+    this.camX = clamp(this.px - viewW / 2, 0, Math.max(0, this.worldW - viewW));
+    this.camY = clamp(this.py - viewH / 2, 0, Math.max(0, this.worldH - viewH));
+  }
+
+  private updateCamera(dt: number) {
+    const viewW = this.W / this.viewScale, viewH = this.H / this.viewScale;
+    const tx = clamp(this.px - viewW / 2, 0, Math.max(0, this.worldW - viewW));
+    const ty = clamp(this.py - viewH / 2, 0, Math.max(0, this.worldH - viewH));
+    const k = Math.min(1, dt * 9);
+    this.camX += (tx - this.camX) * k;
+    this.camY += (ty - this.camY) * k;
   }
 
   /* ------------------------------------------------ setup */
@@ -188,9 +235,10 @@ export class Game {
     this.shapeId = 'circle';
     this.weapons = ['disc'];
     this.wcd = [0];
-    this.mods = {};
+    this.mods = { ...this.startMods };
     this.owned = {};
-    this.px = this.W / 2; this.py = this.H / 2;
+    this.coinsEarned = 0;
+    this.px = this.worldW / 2; this.py = this.worldH / 2;
     this.pvx = this.pvy = 0;
     this.score = 0; this.level = 1; this.xp = 0; this.xpNeed = 8;
     this.kills = 0; this.elapsed = 0; this.combo = 0; this.comboT = 0; this.bestCombo = 0;
@@ -202,6 +250,7 @@ export class Game {
     this.recompute();
     this.hp = this.maxHp;
     this.shield = this.shieldMax; this.shieldT = 0;
+    this.centerCamera();
     this.phase = 'playing';
     this.banner('SURVIVE', 1.6);
     this.push();
@@ -331,7 +380,7 @@ export class Game {
       picked.push({ key: 'hp:1', def: UPGRADES.find((u) => u.id === 'hp')!, level: 1 });
     }
     this.choices = picked;
-    this.rerolls = lucky;
+    this.rerolls = lucky + this.bonusRerolls;
   }
 
   reroll() {
@@ -433,6 +482,7 @@ export class Game {
     this.updateHelpers(dt);
     this.updateMines(dt);
     this.updateWeapons(dt);
+    this.updateCamera(dt);
 
     // combo decay
     if (this.comboT > 0) {
@@ -488,9 +538,9 @@ export class Game {
 
     const pad = this.pr + 4;
     if (this.px < pad) { this.px = pad; this.pvx *= -0.35; }
-    if (this.px > this.W - pad) { this.px = this.W - pad; this.pvx *= -0.35; }
+    if (this.px > this.worldW - pad) { this.px = this.worldW - pad; this.pvx *= -0.35; }
     if (this.py < pad) { this.py = pad; this.pvy *= -0.35; }
-    if (this.py > this.H - pad) { this.py = this.H - pad; this.pvy *= -0.35; }
+    if (this.py > this.worldH - pad) { this.py = this.worldH - pad; this.pvy *= -0.35; }
 
     if (this.wantDash) {
       this.wantDash = false;
@@ -541,8 +591,8 @@ export class Game {
           if (!h) break;
           const a = Math.random() * 6.28;
           h.active = true; h.kind = 0; h.r = 13;
-          h.x = clamp(this.px + Math.cos(a) * 60, 20, this.W - 20);
-          h.y = clamp(this.py + Math.sin(a) * 60, 20, this.H - 20);
+          h.x = clamp(this.px + Math.cos(a) * 60, 20, this.worldW - 20);
+          h.y = clamp(this.py + Math.sin(a) * 60, 20, this.worldH - 20);
           h.cd = 0; h.life = 26; h.dmg = 9 * st.droneDmg; h.rot = 0;
           this.fx.ring(h.x, h.y, 4, 30, 0.4, 3, '#fbbf24');
         }
@@ -604,6 +654,7 @@ export class Game {
   private die() {
     this.hp = 0;
     this.phase = 'dead';
+    this.coinsEarned = Math.max(1, Math.floor((this.score / 100 + this.kills * 0.5) * this.coinMul));
     this.fx.doFlash('#ffffff', 0.9, 0.5);
     this.fx.addShake(30);
     this.fx.burst(this.px, this.py, 90, SHAPES[this.shapeId].color, { spd: 520, size: 5, life: 1.1 });
@@ -658,7 +709,7 @@ export class Game {
     let fired = false;
 
     if (w.kind === 'beam') {
-      const range = Math.max(this.W, this.H) * 1.3;
+      const range = Math.max(this.worldW, this.worldH) * 1.3;
       const a = this.aimA;
       const x2 = this.px + Math.cos(a) * range, y2 = this.py + Math.sin(a) * range;
       const bw = w.radius * st.psize;
@@ -797,7 +848,7 @@ export class Game {
       }
 
       let dead = p.life <= 0;
-      const off = p.x < -60 || p.x > this.W + 60 || p.y < -60 || p.y > this.H + 60;
+      const off = p.x < -60 || p.x > this.worldW + 60 || p.y < -60 || p.y > this.worldH + 60;
       if (off) dead = true;
 
       if (!dead) {
@@ -877,7 +928,7 @@ export class Game {
       b.life -= dt;
       b.x += b.vx * dt; b.y += b.vy * dt;
       b.rot += dt * 6;
-      if (b.life <= 0 || b.x < -40 || b.x > this.W + 40 || b.y < -40 || b.y > this.H + 40) { b.active = false; continue; }
+      if (b.life <= 0 || b.x < -40 || b.x > this.worldW + 40 || b.y < -40 || b.y > this.worldH + 40) { b.active = false; continue; }
       const dx = this.px - b.x, dy = this.py - b.y;
       const rr = this.pr + b.r;
       if (dx * dx + dy * dy <= rr * rr) {
@@ -1020,15 +1071,15 @@ export class Game {
       if (e.age > 1.2) {
         const pad = e.r;
         if (e.x < pad) { e.x = pad; e.vx = Math.abs(e.vx); }
-        if (e.x > this.W - pad) { e.x = this.W - pad; e.vx = -Math.abs(e.vx); }
+        if (e.x > this.worldW - pad) { e.x = this.worldW - pad; e.vx = -Math.abs(e.vx); }
         if (e.y < pad) { e.y = pad; e.vy = Math.abs(e.vy); }
-        if (e.y > this.H - pad) { e.y = this.H - pad; e.vy = -Math.abs(e.vy); }
+        if (e.y > this.worldH - pad) { e.y = this.worldH - pad; e.vy = -Math.abs(e.vy); }
       } else {
         const pad = e.r + 30;
         if (e.x < -pad) e.x = -pad;
-        if (e.x > this.W + pad) e.x = this.W + pad;
+        if (e.x > this.worldW + pad) e.x = this.worldW + pad;
         if (e.y < -pad) e.y = -pad;
-        if (e.y > this.H + pad) e.y = this.H + pad;
+        if (e.y > this.worldH + pad) e.y = this.worldH + pad;
       }
 
       // contact with player
@@ -1064,7 +1115,22 @@ export class Game {
     }
   }
 
-  private damageEnemy(e: Enemy, dmg: number, crit: boolean, kx: number, ky: number) {
+  private _chainSet = new Set<number>();
+
+  private nearestNotIn(x: number, y: number, max: number, set: Set<number>): Enemy | null {
+    let best: Enemy | null = null;
+    let bd = max * max;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i];
+      if (!e.active || set.has(e.id)) continue;
+      const dx = e.x - x, dy = e.y - y;
+      const d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = e; }
+    }
+    return best;
+  }
+
+  private damageEnemy(e: Enemy, dmg: number, crit: boolean, kx: number, ky: number, chainDepth = 0) {
     if (!e.active) return;
     const st = this.stats!;
     let d = dmg;
@@ -1080,10 +1146,19 @@ export class Game {
     if (st.freeze > 0 && Math.random() < st.freeze) e.frozen = Math.max(e.frozen, 0.9);
     if (st.explode > 0 && Math.random() < 0.15 * st.explode) this.explode(e.x, e.y, 46 * st.aoe, d * 0.6, '#ffb347');
     if (st.chainhit > 0) {
-      const t = this.nearestEnemy(e.x, e.y, 180, e.id);
-      if (t) {
-        this.fx.beam(e.x, e.y, t.x, t.y, 2.4, '#bff7ff', 0.14);
-        this.damageEnemy(t, d * 0.45, false, 0, 0);
+      // arcing "lightning" that jumps enemy-to-enemy, never back to a hit foe
+      const maxJumps = Math.min(6, 1 + Math.floor(st.chainhit));
+      if (chainDepth === 0) this._chainSet.clear();
+      this._chainSet.add(e.id);
+      const next = d * 0.6;
+      if (chainDepth < maxJumps && next >= 1.5) {
+        const t = this.nearestNotIn(e.x, e.y, 210, this._chainSet);
+        if (t) {
+          this._chainSet.add(t.id);
+          this.fx.beam(e.x, e.y, t.x, t.y, 2.6, '#bff7ff', 0.16);
+          this.fx.burst((e.x + t.x) / 2, (e.y + t.y) / 2, 3, '#dffbff', { spd: 120, size: 2.2, life: 0.18 });
+          this.damageEnemy(t, next, false, 0, 0, chainDepth + 1);
+        }
       }
     }
     if (crit) {
@@ -1455,17 +1530,26 @@ export class Game {
     return base * (1 + (t / 72) * 0.30 + Math.pow(t / 118, 1.6) * 0.72);
   }
 
+  // spawn just outside the visible viewport, around the player, clamped to world
+  private offscreenPoint(extra = 60): { x: number; y: number } {
+    const viewW = this.W / this.viewScale, viewH = this.H / this.viewScale;
+    const rad = Math.hypot(viewW, viewH) * 0.5 + extra;
+    for (let tries = 0; tries < 8; tries++) {
+      const a = Math.random() * Math.PI * 2;
+      const x = this.px + Math.cos(a) * rad;
+      const y = this.py + Math.sin(a) * rad;
+      if (x > 20 && x < this.worldW - 20 && y > 20 && y < this.worldH - 20) return { x, y };
+    }
+    // fallback: clamp onto a world edge
+    return {
+      x: clamp(this.px + (Math.random() < 0.5 ? -rad : rad), 20, this.worldW - 20),
+      y: clamp(this.py + (Math.random() < 0.5 ? -rad : rad), 20, this.worldH - 20),
+    };
+  }
+
   private spawnAtEdge(id: string) {
-    const d = ENEMIES[id];
-    const side = Math.floor(Math.random() * 4);
-    let x = 0, y = 0;
-    const m = 40;
-    if (side === 0) { x = rnd(0, this.W); y = -m; }
-    else if (side === 1) { x = this.W + m; y = rnd(0, this.H); }
-    else if (side === 2) { x = rnd(0, this.W); y = this.H + m; }
-    else { x = -m; y = rnd(0, this.H); }
-    this.spawnEnemy(id, x, y, 1);
-    void d;
+    const p = this.offscreenPoint(50);
+    this.spawnEnemy(id, p.x, p.y, 1);
   }
 
   spawnEnemy(id: string, x: number, y: number, hpMul: number) {
@@ -1475,7 +1559,7 @@ export class Game {
     e.active = true;
     e.id = this.eid++;
     e.def = d;
-    e.x = clamp(x, -50, this.W + 50); e.y = clamp(y, -50, this.H + 50);
+    e.x = clamp(x, -50, this.worldW + 50); e.y = clamp(y, -50, this.worldH + 50);
     e.r = d.r; e.sides = d.sides; e.hp = e.maxHp = this.scaleHP(d.hp) * hpMul;
     e.dmg = d.dmg * (1 + this.elapsed / 400);
     e.speed = d.speed * (1 + Math.min(0.4, this.elapsed / 600));
@@ -1494,13 +1578,8 @@ export class Game {
   }
 
   private spawnBoss() {
-    const side = Math.floor(Math.random() * 4);
-    let x = 0, y = 0;
-    if (side === 0) { x = rnd(100, this.W - 100); y = -60; }
-    else if (side === 1) { x = this.W + 60; y = rnd(100, this.H - 100); }
-    else if (side === 2) { x = rnd(100, this.W - 100); y = this.H + 60; }
-    else { x = -60; y = rnd(100, this.H - 100); }
-    this.spawnEnemy('edecagon', x, y, 1 + this.bossCount * 0.55);
+    const p = this.offscreenPoint(90);
+    this.spawnEnemy('edecagon', p.x, p.y, 1 + this.bossCount * 0.55);
   }
 
   /* ------------------------------------------------ state push */
@@ -1523,6 +1602,7 @@ export class Game {
       combo: this.combo,
       owned: this.owned,
       paused: this.phase === 'paused',
+      coinsEarned: this.coinsEarned,
     });
   }
 

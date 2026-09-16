@@ -15,30 +15,50 @@ function hexA(hex: string, a: number) {
   return `rgba(${r},${g},${b},${a})`;
 }
 
+function screenTransform(g: Game, ctx: CanvasRenderingContext2D, shake = false) {
+  const sx = shake ? g.fx.shakeX : 0;
+  const sy = shake ? g.fx.shakeY : 0;
+  ctx.setTransform(g.dpr, 0, 0, g.dpr, sx * g.dpr, sy * g.dpr);
+}
+
+function worldTransform(g: Game, ctx: CanvasRenderingContext2D) {
+  const s = g.viewScale * g.dpr;
+  ctx.setTransform(s, 0, 0, s, (g.fx.shakeX - g.camX * g.viewScale) * g.dpr, (g.fx.shakeY - g.camY * g.viewScale) * g.dpr);
+}
+
 export function render(g: Game, tNow: number) {
   const ctx = g.ctx;
   const W = g.W, H = g.H;
-  const key = W + 'x' + H;
+  const th = g.theme;
+  const key = W + 'x' + H + th.id;
   if (key !== bgKey) {
     bgKey = key;
-    const gr = ctx.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, Math.max(W, H) * 0.78);
-    gr.addColorStop(0, '#101a34');
-    gr.addColorStop(0.55, '#0a0f22');
-    gr.addColorStop(1, '#05070f');
+    const gr = ctx.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, Math.max(W, H) * 0.82);
+    gr.addColorStop(0, th.bg[0]);
+    gr.addColorStop(0.55, th.bg[1]);
+    gr.addColorStop(1, th.bg[2]);
     bgGrad = gr;
   }
 
-  ctx.setTransform(g.dpr, 0, 0, g.dpr, g.fx.shakeX * g.dpr, g.fx.shakeY * g.dpr);
+  const inGame = g.phase !== 'menu';
+
+  // ---- background (screen space, gentle shake) ----
+  screenTransform(g, ctx, true);
   ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = 1;
   ctx.fillStyle = bgGrad || '#080c18';
   ctx.fillRect(-40, -40, W + 80, H + 80);
-
-  const inGame = g.phase !== 'menu';
   drawBackground(g, ctx, tNow, inGame);
 
-  if (g.phase === 'menu') { drawMenuDeco(g, ctx, tNow); drawVignette(g, ctx); return; }
+  if (g.phase === 'menu') {
+    drawMenuDeco(g, ctx, tNow);
+    screenTransform(g, ctx, false);
+    drawVignette(g, ctx);
+    return;
+  }
 
+  // ---- world (camera space) ----
+  worldTransform(g, ctx);
   ctx.globalCompositeOperation = 'lighter';
   drawPickups(g, ctx);
   drawMines(g, ctx);
@@ -56,6 +76,9 @@ export function render(g: Game, tNow: number) {
   drawFloats(g, ctx);
   ctx.globalCompositeOperation = 'source-over';
   drawArenaEdge(g, ctx);
+
+  // ---- HUD & overlays (screen space, no shake) ----
+  screenTransform(g, ctx, false);
   drawHUD(g, ctx, tNow);
   drawVignette(g, ctx);
   drawFlash(g, ctx);
@@ -63,24 +86,29 @@ export function render(g: Game, tNow: number) {
 
 function drawBackground(g: Game, ctx: CanvasRenderingContext2D, t: number, inGame: boolean) {
   const W = g.W, H = g.H;
-  // grid
-  const step = 64;
-  const ox = inGame ? (-g.px * 0.04) % step : (t * 6) % step;
-  const oy = inGame ? (-g.py * 0.04) % step : 0;
+  const scale = inGame ? g.viewScale : 1;
+  const step = 64 * scale;
+  // grid scrolls with the camera in world space (projected to screen)
+  let ox = inGame ? (-g.camX * scale) % step : (t * 6) % step;
+  let oy = inGame ? (-g.camY * scale) % step : 0;
+  if (ox < 0) ox += step;
+  if (oy < 0) oy += step;
   ctx.lineWidth = 1;
-  ctx.strokeStyle = 'rgba(90,140,220,0.075)';
+  ctx.strokeStyle = g.theme.grid;
   ctx.beginPath();
   for (let x = ox - step; x < W + step; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
   for (let y = oy - step; y < H + step; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
   ctx.stroke();
 
-  // stars
-  ctx.fillStyle = 'rgba(180,215,255,0.5)';
+  // parallax stars
+  ctx.fillStyle = g.theme.star;
   const n = g.stars.length;
+  const px = inGame ? g.camX * scale : 0;
+  const py = inGame ? g.camY * scale : 0;
   for (let i = 0; i < n; i++) {
     const s = g.stars[i];
-    const sx = s.x - (inGame ? g.pvx : 0) * 0.02 * s.z;
-    const sy = s.y - (inGame ? g.pvy : 0) * 0.02 * s.z;
+    const sx = s.x - px * 0.14 * s.z;
+    const sy = s.y - py * 0.14 * s.z;
     const sz = s.z * 1.7;
     ctx.globalAlpha = 0.15 + 0.5 * s.z * (0.6 + 0.4 * Math.sin(t * 1.6 + i));
     ctx.fillRect(((sx % W) + W) % W, ((sy % H) + H) % H, sz, sz);
@@ -114,10 +142,9 @@ function drawMenuDeco(g: Game, ctx: CanvasRenderingContext2D, t: number) {
 }
 
 function drawArenaEdge(g: Game, ctx: CanvasRenderingContext2D) {
-  const W = g.W, H = g.H;
-  ctx.strokeStyle = 'rgba(56,245,224,0.16)';
-  ctx.lineWidth = 2;
-  ctx.strokeRect(2, 2, W - 4, H - 4);
+  ctx.strokeStyle = g.theme.edge;
+  ctx.lineWidth = 3 / g.viewScale;
+  ctx.strokeRect(0, 0, g.worldW, g.worldH);
 }
 
 function drawPickups(g: Game, ctx: CanvasRenderingContext2D) {
@@ -401,6 +428,8 @@ function drawHelpers(g: Game, ctx: CanvasRenderingContext2D) {
 
 function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   const sh = SHAPES[g.shapeId];
+  const col = g.playerColor || sh.color;
+  const acc = g.playerColor || sh.accent;
   const inv = g.invuln > 0 && Math.floor(g.invuln * 20) % 2 === 0;
   const vel = Math.hypot(g.pvx, g.pvy);
   const rot = Math.atan2(g.pvy, g.pvx) + (vel > 20 ? 0 : t * 0.7);
@@ -410,7 +439,7 @@ function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   if (vel > 30) {
     const a = Math.atan2(g.pvy, g.pvx) + Math.PI;
     ctx.globalAlpha = 0.5;
-    ctx.fillStyle = sh.accent;
+    ctx.fillStyle = acc;
     polyPath(ctx, g.px + Math.cos(a) * r * 1.15, g.py + Math.sin(a) * r * 1.15, r * 0.45, 3, a);
     ctx.fill();
     ctx.globalAlpha = 1;
@@ -418,14 +447,14 @@ function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
 
   // glow
   ctx.globalAlpha = 0.2;
-  ctx.fillStyle = sh.color;
+  ctx.fillStyle = col;
   ctx.beginPath(); ctx.arc(g.px, g.py, r * 2.6, 0, 6.2832); ctx.fill();
   ctx.globalAlpha = 0.12;
   ctx.beginPath(); ctx.arc(g.px, g.py, r * 4.2, 0, 6.2832); ctx.fill();
   ctx.globalAlpha = 1;
 
   // aim tick
-  ctx.strokeStyle = hexA(sh.color, 0.45);
+  ctx.strokeStyle = hexA(col, 0.45);
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(g.px + Math.cos(g.aimA) * (r + 6), g.py + Math.sin(g.aimA) * (r + 6));
@@ -434,13 +463,13 @@ function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
 
   // body
   ctx.globalAlpha = inv ? 0.4 : 1;
-  ctx.fillStyle = hexA(sh.color, 0.28);
-  ctx.strokeStyle = inv ? '#ffffff' : sh.color;
+  ctx.fillStyle = hexA(col, 0.28);
+  ctx.strokeStyle = inv ? '#ffffff' : col;
   ctx.lineWidth = 3;
   polyPath(ctx, g.px, g.py, r, sh.sides, rot);
   ctx.fill(); ctx.stroke();
 
-  ctx.fillStyle = sh.color;
+  ctx.fillStyle = col;
   polyPath(ctx, g.px, g.py, r * 0.42, sh.sides, -rot * 1.6 + t);
   ctx.fill();
   ctx.globalAlpha = 1;
