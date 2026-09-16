@@ -22,6 +22,10 @@ interface Enemy {
   ax: number; ay: number;
   slow: number; frozen: number; scale: number; def: EnemyDef;
   hitCd: number; age: number;
+  // elemental status
+  burn: number; burnDps: number;
+  poison: number; poisonDps: number;
+  marked: number; voided: number;
 }
 
 interface Proj {
@@ -44,7 +48,7 @@ interface Pickup { active: boolean; x: number; y: number; vx: number; vy: number
 
 interface Orbital { active: boolean; angle: number; dist: number; r: number; dmg: number; color: string; kind: number; spin: number; x: number; y: number }
 
-interface Helper { active: boolean; x: number; y: number; vx: number; vy: number; cd: number; life: number; dmg: number; kind: number; r: number; rot: number }
+interface Helper { active: boolean; x: number; y: number; vx: number; vy: number; cd: number; life: number; dmg: number; kind: number; r: number; rot: number; color: string }
 
 interface Mine { active: boolean; x: number; y: number; t: number; r: number; dmg: number; armed: number }
 
@@ -158,7 +162,7 @@ export class Game {
     for (let i = 0; i < 130; i++) this.enemies.push(this.blankEnemy());
     for (let i = 0; i < 260; i++) this.pickups.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, v: 1, life: 0, heal: false });
     for (let i = 0; i < 26; i++) this.orbitals.push({ active: false, angle: 0, dist: 0, r: 10, dmg: 1, color: '#fff', kind: 0, spin: 0, x: 0, y: 0 });
-    for (let i = 0; i < 30; i++) this.helpers.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, cd: 0, life: 0, dmg: 1, kind: 0, r: 8, rot: 0 });
+    for (let i = 0; i < 60; i++) this.helpers.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, cd: 0, life: 0, dmg: 1, kind: 0, r: 8, rot: 0, color: '#fff' });
     for (let i = 0; i < 30; i++) this.mines.push({ active: false, x: 0, y: 0, t: 0, r: 0, dmg: 0, armed: 0 });
     this.resize();
   }
@@ -168,6 +172,7 @@ export class Game {
       active: false, id: 0, x: 0, y: 0, vx: 0, vy: 0, r: 12, sides: 0, hp: 1, maxHp: 1,
       dmg: 1, speed: 50, xp: 1, score: 1, rot: 0, spin: 0, flash: 0,
       atk: 'melee', atkT: 1, windup: 0, state: 0, ax: 0, ay: 0, slow: 0, frozen: 0, scale: 1, hitCd: 0, age: 0,
+      burn: 0, burnDps: 0, poison: 0, poisonDps: 0, marked: 0, voided: 0,
       def: ENEMIES.ecircle,
     };
   }
@@ -263,6 +268,8 @@ export class Game {
   recompute() {
     this.stats = this.computeStats();
     const m = this.mods;
+    const sh = SHAPES[this.shapeId];
+    this.pr = sh.size;
     const newMax = this.stats.maxHp;
     if (newMax > this.maxHp) this.hp += newMax - this.maxHp;
     this.maxHp = newMax;
@@ -321,6 +328,33 @@ export class Game {
       orbitDmg: 1 + (m.shieldorbs || 0),
       companion: m.companion || 0,
       companionDmg: 1 + (m.companionDmg || 0),
+      // specialised helpers
+      laserDrone: m.laserDrone || 0,
+      frostDrone: m.frostDrone || 0,
+      fireDrone: m.fireDrone || 0,
+      shockDrone: m.shockDrone || 0,
+      healDrone: m.healDrone || 0,
+      shieldDrone: m.shieldDrone || 0,
+      sniper: m.sniper || 0,
+      flamethrower: m.flamethrower || 0,
+      beacon: m.beacon || 0,
+      wolf: m.wolf || 0,
+      golem: m.golem || 0,
+      prism: m.prism || 0,
+      // perimeter multi-barrel
+      barrels: Math.min(4, Math.floor(m.barrels || 0)), // +0..4 → total 1..5
+      focus: m.focus || 0,
+      // elemental infusions
+      fire: m.fire || 0,
+      firedmg: 1 + (m.firedmg || 0),
+      frost: m.frost || 0,
+      frostpow: 1 + (m.frostpow || 0),
+      shock: m.shock || 0,
+      shockpow: 1 + (m.shockpow || 0),
+      poison: m.poison || 0,
+      voidMark: m.void || 0,
+      overheat: m.overheat || 0,
+      mark: m.mark || 0,
       regenkill: m.regenkill || 0,
       timewarp: m.timewarp || 0,
       xpwave: m.xpwave || 0,
@@ -597,7 +631,7 @@ export class Game {
           const h = this.freeHelper();
           if (!h) break;
           const a = Math.random() * 6.28;
-          h.active = true; h.kind = 0; h.r = 13;
+          h.active = true; h.kind = 0; h.r = 13; h.color = '#fbbf24';
           h.x = clamp(this.px + Math.cos(a) * 60, 20, this.worldW - 20);
           h.y = clamp(this.py + Math.sin(a) * 60, 20, this.worldH - 20);
           h.cd = 0; h.life = 26; h.dmg = 9 * st.droneDmg; h.rot = 0;
@@ -708,49 +742,88 @@ export class Game {
     }
   }
 
+  /** Angles of the shape's perimeter barrels (1 base + up to 4 Rim Mounts). */
+  private barrelAngles(baseA: number): number[] {
+    const st = this.stats!;
+    const n = 1 + st.barrels; // 1..5
+    if (n <= 1) return [baseA];
+    // Spread across the rim, converging with Focus Fire
+    const arc = Math.PI * (0.55 - st.focus * 0.12); // wider arc without focus
+    const out: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const t = n === 1 ? 0 : (i / (n - 1) - 0.5);
+      out.push(baseA + t * arc * 2);
+    }
+    return out;
+  }
+
+  private elementalColor(base: string): string {
+    const st = this.stats!;
+    if (st.fire > 0 && st.frost <= 0 && st.shock <= 0) return '#ff7a45';
+    if (st.frost > 0 && st.fire <= 0) return '#7dd3fc';
+    if (st.shock > 0 && st.fire <= 0) return '#c4b5fd';
+    if (st.poison > 0) return '#a3e635';
+    if (st.voidMark > 0) return '#e879f9';
+    return base;
+  }
+
   private fireWeapon(w: typeof WEAPONS[WeaponId], wi: number) {
     const st = this.stats!;
-    const dmgBase = w.dmg * st.dmg;
-    const count = w.count + (w.kind === 'beam' || w.kind === 'chain' || w.kind === 'nova' || w.kind === 'orbit' ? 0 : st.multi);
+    // Overheat: continuous fire ramps damage & rate visually via banner? keep subtle
+    const heat = st.overheat > 0 ? 1 + Math.min(0.45, this.elapsed % 4 * 0.08 * st.overheat) : 1;
+    const dmgBase = w.dmg * st.dmg * heat;
+    const multi = (w.kind === 'beam' || w.kind === 'chain' || w.kind === 'nova' || w.kind === 'orbit') ? 0 : st.multi;
+    const count = w.count + multi;
     const spread = w.spread;
+    // Primary weapon gets perimeter multi-barrels; aux weapons fire once
+    const barrels = wi === 0 ? this.barrelAngles(this.aimA) : [this.aimA];
+    const col = this.elementalColor(w.color);
     let fired = false;
 
     if (w.kind === 'beam') {
       const range = Math.max(this.worldW, this.worldH) * 1.3;
-      const a = this.aimA;
-      const x2 = this.px + Math.cos(a) * range, y2 = this.py + Math.sin(a) * range;
       const bw = w.radius * st.psize;
-      this.fx.beam(this.px, this.py, x2, y2, bw, w.color, 0.16);
-      this.fx.burst(this.px, this.py, 5, w.color, { spd: 150, size: 3, life: 0.25, dir: a, spread: 0.9 });
-      this.fx.addShake(w.id === 'rail' ? 7 : 3);
-      for (const e of this.enemies) {
-        if (!e.active) continue;
-        if (segDist(e.x, e.y, this.px, this.py, x2, y2) < e.r + bw) {
-          this.damageEnemy(e, dmgBase, Math.random() < st.crit, Math.cos(a) * 40 * st.knock, Math.sin(a) * 40 * st.knock);
+      for (const a of barrels) {
+        const ox = this.px + Math.cos(a) * (this.pr * 0.6);
+        const oy = this.py + Math.sin(a) * (this.pr * 0.6);
+        const x2 = ox + Math.cos(a) * range, y2 = oy + Math.sin(a) * range;
+        this.fx.beam(ox, oy, x2, y2, bw, col, 0.16);
+        this.fx.burst(ox, oy, 4, col, { spd: 150, size: 3, life: 0.25, dir: a, spread: 0.9 });
+        for (const e of this.enemies) {
+          if (!e.active) continue;
+          if (segDist(e.x, e.y, ox, oy, x2, y2) < e.r + bw) {
+            this.damageEnemy(e, dmgBase, Math.random() < st.crit, Math.cos(a) * 40 * st.knock, Math.sin(a) * 40 * st.knock);
+          }
         }
       }
-      sfx.shoot(w.id === 'rail' ? 'beam' : 'beam');
+      this.fx.addShake(w.id === 'rail' ? 7 : 2 + barrels.length);
+      sfx.shoot('beam');
       fired = true;
     } else if (w.kind === 'chain') {
-      let src = this.nearestEnemy(this.px, this.py, 420);
-      if (!src) return;
-      let fx = this.px, fy = this.py;
-      let lastId = 0;
-      const jumps = w.count + Math.floor(st.multi * 0.5);
-      for (let j = 0; j < jumps; j++) {
-        const t = this.nearestEnemy(fx, fy, 260, lastId);
-        if (!t) break;
-        this.fx.beam(fx, fy, t.x, t.y, 3.4, w.color, 0.2);
-        this.fx.burst(t.x, t.y, 5, w.color, { spd: 130, size: 2.6, life: 0.3 });
-        this.damageEnemy(t, dmgBase * (1 - j * 0.12), Math.random() < st.crit, 0, 0);
-        fx = t.x; fy = t.y; lastId = t.id;
+      // Each barrel starts its own lightning chain
+      const jumps = w.count + Math.floor(st.multi * 0.5) + Math.floor(st.shock * 0.5);
+      for (const a of barrels) {
+        const ox = this.px + Math.cos(a) * this.pr;
+        const oy = this.py + Math.sin(a) * this.pr;
+        let src = this.nearestEnemy(ox, oy, 420);
+        if (!src) continue;
+        let fx = ox, fy = oy;
+        let lastId = 0;
+        for (let j = 0; j < jumps; j++) {
+          const t = this.nearestEnemy(fx, fy, 260 + st.shockpow * 40, lastId);
+          if (!t) break;
+          this.fx.beam(fx, fy, t.x, t.y, 3.4, col, 0.2);
+          this.fx.burst(t.x, t.y, 5, col, { spd: 130, size: 2.6, life: 0.3 });
+          this.damageEnemy(t, dmgBase * (1 - j * 0.12), Math.random() < st.crit, 0, 0);
+          fx = t.x; fy = t.y; lastId = t.id;
+        }
       }
       sfx.shoot('arc');
       fired = true;
     } else if (w.kind === 'nova') {
-      const R = w.radius * st.aoe;
-      this.fx.ring(this.px, this.py, 12, R, 0.42, 7, w.color);
-      this.fx.burst(this.px, this.py, 22, w.color, { spd: R * 2.4, size: 3.4, life: 0.4, drag: 0.86 });
+      const R = w.radius * st.aoe * (1 + st.barrels * 0.06);
+      this.fx.ring(this.px, this.py, 12, R, 0.42, 7, col);
+      this.fx.burst(this.px, this.py, 22, col, { spd: R * 2.4, size: 3.4, life: 0.4, drag: 0.86 });
       this.fx.addShake(5);
       for (const e of this.enemies) {
         if (!e.active) continue;
@@ -763,46 +836,46 @@ export class Game {
       sfx.shoot('nova');
       fired = true;
     } else {
-      const baseA = this.aimA;
-      for (let i = 0; i < count; i++) {
-        let a: number;
-        if (w.kind === 'ring') {
-          a = baseA + (i / count) * Math.PI * 2;
-        } else if (count === 1) {
-          a = baseA + rnd(-spread, spread) * 0.5;
-        } else {
-          const t = count === 1 ? 0 : (i / (count - 1) - 0.5);
-          a = baseA + t * spread * 2 + rnd(-0.03, 0.03);
+      for (const baseA of barrels) {
+        for (let i = 0; i < count; i++) {
+          let a: number;
+          if (w.kind === 'ring') {
+            a = baseA + (i / count) * Math.PI * 2;
+          } else if (count === 1) {
+            a = baseA + rnd(-spread, spread) * 0.5;
+          } else {
+            const t = (i / (count - 1) - 0.5);
+            a = baseA + t * spread * 2 + rnd(-0.03, 0.03);
+          }
+          const sp = w.speed * st.pspd;
+          const p = this.freeProj();
+          if (!p) break;
+          p.active = true;
+          p.x = this.px + Math.cos(a) * (this.pr + 6);
+          p.y = this.py + Math.sin(a) * (this.pr + 6);
+          p.vx = Math.cos(a) * sp; p.vy = Math.sin(a) * sp;
+          p.r = w.radius * st.psize;
+          p.dmg = dmgBase;
+          p.pierce = w.pierce === 99 ? 999 : w.pierce + st.pierce;
+          p.life = (w.id === 'disc' ? 1.5 : w.id === 'orb' ? 2.2 : 1.15) * st.life;
+          p.kind = w.kind as Proj['kind'];
+          p.color = col;
+          p.rot = a; p.spin = w.kind === 'disc' ? 22 : 6;
+          p.homing = w.kind === 'orb' ? 4.2 + st.homing : st.homing * 1.6;
+          p.aoe = (w.aoe || 0) * st.aoe;
+          p.crit = Math.random() < st.crit;
+          if (p.crit) p.dmg *= st.critd;
+          p.hits.length = 0; p.bounced = st.ricochet; p.split = st.bloom;
+          p.trail = 0;
         }
-        const sp = w.speed * st.pspd;
-        const p = this.freeProj();
-        if (!p) break;
-        p.active = true;
-        p.x = this.px + Math.cos(a) * (this.pr + 6);
-        p.y = this.py + Math.sin(a) * (this.pr + 6);
-        p.vx = Math.cos(a) * sp; p.vy = Math.sin(a) * sp;
-        p.r = w.radius * st.psize;
-        p.dmg = dmgBase;
-        p.pierce = w.pierce === 99 ? 999 : w.pierce + st.pierce;
-        p.life = (w.id === 'disc' ? 1.5 : w.id === 'orb' ? 2.2 : 1.15) * st.life;
-        p.kind = w.kind as Proj['kind'];
-        p.color = w.color;
-        p.rot = a; p.spin = w.kind === 'disc' ? 22 : 6;
-        p.homing = w.kind === 'orb' ? 4.2 + st.homing : st.homing * 1.6;
-        p.aoe = (w.aoe || 0) * st.aoe;
-        p.crit = Math.random() < st.crit;
-        if (p.crit) p.dmg *= st.critd;
-        p.hits.length = 0; p.bounced = st.ricochet; p.split = st.bloom;
-        p.trail = 0;
+        this.fx.burst(this.px + Math.cos(baseA) * this.pr, this.py + Math.sin(baseA) * this.pr,
+          w.id === 'shell' ? 8 : 2, col, { spd: 150, size: 2.4, life: 0.18, dir: baseA, spread: 0.7, drag: 0.82 });
       }
-      // muzzle
-      this.fx.burst(this.px + Math.cos(baseA) * this.pr, this.py + Math.sin(baseA) * this.pr,
-        w.id === 'shell' ? 10 : 3, w.color, { spd: 150, size: 2.4, life: 0.18, dir: baseA, spread: 0.7, drag: 0.82 });
-      this.fx.addShake(w.id === 'shell' ? 5 : w.id === 'bullet' ? 0.5 : 1.2);
+      this.fx.addShake(w.id === 'shell' ? 5 : w.id === 'bullet' ? 0.4 : 1.0);
       sfx.shoot(w.id);
       fired = true;
     }
-    if (fired && wi > 0) { /* aux weapon fired */ }
+    void fired;
   }
 
   private freeProj(): Proj | null {
@@ -975,6 +1048,21 @@ export class Game {
       e.rot += e.spin * dt;
       if (e.flash > 0) e.flash -= dt;
       if (e.hitCd > 0) e.hitCd -= dt;
+      // elemental DoTs
+      if (e.burn > 0) {
+        e.burn -= dt;
+        e.hp -= e.burnDps * dt;
+        if (Math.random() < dt * 8) this.fx.burst(e.x, e.y, 1, '#ff7a45', { spd: 40, size: 2, life: 0.25, drag: 0.9 });
+        if (e.hp <= 0) { this.killEnemy(e); continue; }
+      }
+      if (e.poison > 0) {
+        e.poison -= dt;
+        e.hp -= e.poisonDps * dt;
+        if (Math.random() < dt * 5) this.fx.burst(e.x, e.y, 1, '#a3e635', { spd: 30, size: 2.2, life: 0.3, drag: 0.92 });
+        if (e.hp <= 0) { this.killEnemy(e); continue; }
+      }
+      if (e.marked > 0) e.marked -= dt;
+      if (e.voided > 0) e.voided = Math.max(0, e.voided - dt * 0.15);
       e.atkT -= dt;
 
       switch (e.atk) {
@@ -1152,12 +1240,53 @@ export class Game {
     if (hpFrac < 0.35) d *= 1 + st.exec;
     if (e.r >= 21) d *= 1 + st.giant;
     if (e.r <= 14) d *= 1 + st.swarm;
+    // status amp
+    if (e.marked > 0) d *= 1.25;
+    if (e.voided > 0) d *= 1 + 0.12 * e.voided;
     if (crit) d *= 1.0;
     e.hp -= d;
     e.flash = 0.14;
     e.vx += kx; e.vy += ky;
     if (st.leech > 0) this.hp = Math.min(this.maxHp, this.hp + d * st.leech);
-    if (st.freeze > 0 && Math.random() < st.freeze) e.frozen = Math.max(e.frozen, 0.9);
+    // ---- elemental applications ----
+    if (st.fire > 0) {
+      e.burn = Math.max(e.burn, 1.6 + st.fire * 0.5);
+      e.burnDps = Math.max(e.burnDps, d * 0.18 * st.firedmg * st.fire);
+      this.fx.burst(e.x, e.y, 2, '#ff7a45', { spd: 80, size: 2.2, life: 0.25 });
+    }
+    if (st.frost > 0 || st.freeze > 0) {
+      const chance = Math.min(0.85, 0.22 * (st.frost || 0) * st.frostpow + (st.freeze || 0));
+      if (Math.random() < chance) {
+        e.frozen = Math.max(e.frozen, 0.7 + 0.35 * Math.max(1, st.frost) * st.frostpow);
+        this.fx.burst(e.x, e.y, 3, '#7dd3fc', { spd: 90, size: 2.4, life: 0.3 });
+      }
+    }
+    if (st.shock > 0 && chainDepth === 0) {
+      // native lightning arc on hit
+      const jumps = Math.min(4, Math.floor(st.shock));
+      let last = e;
+      const seen = new Set<number>([e.id]);
+      for (let j = 0; j < jumps; j++) {
+        const t = this.nearestNotIn(last.x, last.y, 160 + 40 * st.shockpow, seen);
+        if (!t) break;
+        seen.add(t.id);
+        this.fx.beam(last.x, last.y, t.x, t.y, 2.2, '#c4b5fd', 0.14);
+        // deal shock dmg without re-triggering shock (chainDepth>0)
+        this.damageEnemy(t, d * 0.35 * st.shockpow, false, 0, 0, chainDepth + 1);
+        last = t;
+      }
+    }
+    if (st.poison > 0) {
+      e.poison = Math.max(e.poison, 2.4 + st.poison * 0.6);
+      e.poisonDps = Math.max(e.poisonDps, d * 0.12 * st.poison);
+    }
+    if (st.voidMark > 0) {
+      e.voided = Math.min(5, e.voided + 0.5 * st.voidMark);
+    }
+    if (st.mark > 0 && e.marked <= 0) {
+      e.marked = 3.5;
+      this.fx.ring(e.x, e.y, e.r, e.r + 18, 0.3, 2, '#ffe066');
+    }
     // Secondary effects are capped by cascade depth so chained explosions can
     // never recurse infinitely (which previously froze / crashed the game).
     const canCascade = this._dmgDepth < Game.MAX_CASCADE;
@@ -1379,86 +1508,297 @@ export class Game {
 
   private updateHelpers(dt: number) {
     const st = this.stats!;
-    // drones
-    const wantDrones = Math.floor(st.drones);
-    let dc = 0;
-    for (const h of this.helpers) {
-      if (h.active && h.kind === 1) dc++;
-    }
-    // assign drone slots
-    let di = 0;
-    for (const h of this.helpers) {
-      if (!h.active && di < wantDrones) {
-        h.active = true; h.kind = 1; h.r = 9; h.life = Infinity; h.cd = 0;
-        h.dmg = 7 * st.droneDmg;
-        di++;
+    // ---- ensure desired permanent helpers exist ----
+    // kind map:
+    // 0 turret, 1 basic drone, 2 companion,
+    // 3 laser drone, 4 frost drone, 5 fire drone, 6 shock drone,
+    // 7 heal drone, 8 shield drone, 9 sniper, 10 flamethrower,
+    // 11 beacon, 12 wolf, 13 golem, 14 prism
+    const wants: { kind: number; n: number; r: number; dmg: number; col: string }[] = [
+      { kind: 1,  n: Math.floor(st.drones),      r: 9,  dmg: 7 * st.droneDmg, col: '#8ef7ff' },
+      { kind: 2,  n: Math.floor(st.companion),   r: 13 * st.companionDmg, dmg: 12 * st.companionDmg, col: '#7dfcd6' },
+      { kind: 3,  n: Math.floor(st.laserDrone),  r: 10, dmg: 11 * st.droneDmg, col: '#5ce1ff' },
+      { kind: 4,  n: Math.floor(st.frostDrone),  r: 9,  dmg: 6 * st.droneDmg,  col: '#7dd3fc' },
+      { kind: 5,  n: Math.floor(st.fireDrone),   r: 9,  dmg: 7 * st.droneDmg,  col: '#ff7a45' },
+      { kind: 6,  n: Math.floor(st.shockDrone),  r: 9,  dmg: 8 * st.droneDmg,  col: '#c4b5fd' },
+      { kind: 7,  n: Math.floor(st.healDrone),   r: 10, dmg: 0,                 col: '#6ee7b7' },
+      { kind: 8,  n: Math.floor(st.shieldDrone), r: 11, dmg: 0,                 col: '#7dd3fc' },
+      { kind: 12, n: Math.floor(st.wolf),        r: 12, dmg: 14 * st.companionDmg, col: '#fb923c' },
+      { kind: 13, n: Math.floor(st.golem),       r: 18, dmg: 18 * st.companionDmg, col: '#a8a29e' },
+      { kind: 14, n: Math.floor(st.prism),       r: 10, dmg: 10 * st.droneDmg,  col: '#fde047' },
+    ];
+    for (const w of wants) {
+      let have = 0;
+      for (const h of this.helpers) if (h.active && h.kind === w.kind) have++;
+      for (let i = have; i < w.n; i++) {
+        const h = this.freeHelper();
+        if (!h) break;
+        h.active = true; h.kind = w.kind; h.r = w.r; h.life = Infinity; h.cd = rnd(0, 0.6);
+        h.dmg = w.dmg; h.color = w.col; h.x = this.px + rnd(-20, 20); h.y = this.py + rnd(-20, 20);
+        h.vx = h.vy = 0; h.rot = 0;
       }
     }
-    let dIdx = 0;
+    // drop temporary turrets / snipers / flamethrowers / beacons periodically
+    if (st.sniper > 0) {
+      this.turretT -= dt * 0.4;
+      if (this.turretT <= 0) {
+        this.turretT = 18;
+        for (let i = 0; i < st.sniper; i++) {
+          const h = this.freeHelper(); if (!h) break;
+          const a = Math.random() * 6.28;
+          h.active = true; h.kind = 9; h.r = 12; h.life = 20; h.color = '#e2e8f0';
+          h.x = clamp(this.px + Math.cos(a) * 70, 20, this.worldW - 20);
+          h.y = clamp(this.py + Math.sin(a) * 70, 20, this.worldH - 20);
+          h.cd = 0; h.dmg = 22 * st.droneDmg; h.rot = 0;
+          this.fx.ring(h.x, h.y, 4, 28, 0.35, 3, '#e2e8f0');
+        }
+      }
+    }
+    if (st.flamethrower > 0) {
+      // reuse bombT as a secondary timer slot when idle
+      if ((this as any)._flameT === undefined) (this as any)._flameT = 0;
+      (this as any)._flameT -= dt;
+      if ((this as any)._flameT <= 0) {
+        (this as any)._flameT = 16;
+        for (let i = 0; i < st.flamethrower; i++) {
+          const h = this.freeHelper(); if (!h) break;
+          const a = Math.random() * 6.28;
+          h.active = true; h.kind = 10; h.r = 14; h.life = 14; h.color = '#ff7a45';
+          h.x = clamp(this.px + Math.cos(a) * 55, 20, this.worldW - 20);
+          h.y = clamp(this.py + Math.sin(a) * 55, 20, this.worldH - 20);
+          h.cd = 0; h.dmg = 9 * st.droneDmg; h.rot = 0;
+          this.fx.ring(h.x, h.y, 4, 28, 0.35, 3, '#ff7a45');
+        }
+      }
+    }
+    if (st.beacon > 0) {
+      if ((this as any)._beaconT === undefined) (this as any)._beaconT = 0;
+      (this as any)._beaconT -= dt;
+      if ((this as any)._beaconT <= 0) {
+        (this as any)._beaconT = 22;
+        for (let i = 0; i < st.beacon; i++) {
+          const h = this.freeHelper(); if (!h) break;
+          const a = Math.random() * 6.28;
+          h.active = true; h.kind = 11; h.r = 16; h.life = 18; h.color = '#fde047';
+          h.x = clamp(this.px + Math.cos(a) * 80, 20, this.worldW - 20);
+          h.y = clamp(this.py + Math.sin(a) * 80, 20, this.worldH - 20);
+          h.cd = 0; h.dmg = 0; h.rot = 0;
+          this.fx.ring(h.x, h.y, 6, 40, 0.4, 3, '#fde047');
+        }
+      }
+    }
+
+    // ---- tick helpers ----
+    let orbitIdx = 0;
+    let nearBeacon = false;
     for (const h of this.helpers) {
       if (!h.active) continue;
-      if (h.kind === 1) {
-        dIdx++;
-        const a = this.elapsed * 1.5 * st.orbitSpd + (dIdx / Math.max(1, wantDrones)) * Math.PI * 2;
-        const R = 54 + (dIdx % 2) * 16;
+      // temporary helpers expire
+      if (h.kind === 0 || h.kind === 9 || h.kind === 10 || h.kind === 11) {
+        h.life -= dt;
+        if (h.life <= 0) {
+          h.active = false;
+          this.fx.burst(h.x, h.y, 8, h.kind === 10 ? '#ff7a45' : '#fbbf24', { spd: 140, size: 3, life: 0.35 });
+          continue;
+        }
+      }
+
+      // orbiting drones (1,3,4,5,6,7,8,14)
+      if ([1, 3, 4, 5, 6, 7, 8, 14].includes(h.kind)) {
+        orbitIdx++;
+        const a = this.elapsed * 1.5 * st.orbitSpd + orbitIdx * 0.9;
+        const R = 50 + (orbitIdx % 3) * 16 + (h.kind === 14 ? 20 : 0);
         const tx = this.px + Math.cos(a) * R, ty = this.py + Math.sin(a) * R;
         h.x += (tx - h.x) * Math.min(1, dt * 8);
         h.y += (ty - h.y) * Math.min(1, dt * 8);
+        h.rot = a;
         h.cd -= dt * st.droneRate;
-        if (h.cd <= 0) {
-          const t = this.nearestEnemy(h.x, h.y, 430);
-          if (t) {
-            h.cd = 0.75;
-            const ang = Math.atan2(t.y - h.y, t.x - h.x);
-            const p = this.freeProj();
-            if (p) {
-              p.active = true; p.x = h.x; p.y = h.y;
-              p.vx = Math.cos(ang) * 520; p.vy = Math.sin(ang) * 520;
-              p.r = 3.6; p.dmg = h.dmg * st.dmg; p.pierce = 0; p.life = 1.1;
-              p.kind = 'bullet'; p.color = '#8ef7ff'; p.rot = ang; p.spin = 8;
-              p.homing = st.homing; p.aoe = 0; p.crit = Math.random() < st.crit;
-              if (p.crit) p.dmg *= st.critd;
-              p.hits.length = 0; p.bounced = st.ricochet; p.split = 0; p.trail = 0;
+
+        if (h.kind === 7) {
+          // medic: heal player
+          if (h.cd <= 0) {
+            h.cd = 1.4;
+            if (this.hp < this.maxHp) {
+              this.hp = Math.min(this.maxHp, this.hp + 4 + st.droneDmg * 2);
+              this.fx.beam(h.x, h.y, this.px, this.py, 2, '#6ee7b7', 0.2);
+              this.fx.burst(this.px, this.py, 3, '#6ee7b7', { spd: 60, size: 2, life: 0.3 });
             }
-            sfx.shoot('bullet');
+          }
+        } else if (h.kind === 8) {
+          // aegis: recharge shield
+          if (h.cd <= 0) {
+            h.cd = 5.5;
+            if (this.shield < this.shieldMax) {
+              this.shield++;
+              this.fx.ring(this.px, this.py, 16, 50, 0.35, 3, '#7dd3fc');
+              this.fx.beam(h.x, h.y, this.px, this.py, 2.4, '#7dd3fc', 0.25);
+            }
+          }
+        } else if (h.kind === 14) {
+          // prism: fires refracted beams at nearest foe
+          if (h.cd <= 0) {
+            const t = this.nearestEnemy(h.x, h.y, 480);
+            if (t) {
+              h.cd = 0.85;
+              const ang = Math.atan2(t.y - h.y, t.x - h.x);
+              for (let k = -1; k <= 1; k++) {
+                const aa = ang + k * 0.18;
+                const x2 = h.x + Math.cos(aa) * 520, y2 = h.y + Math.sin(aa) * 520;
+                this.fx.beam(h.x, h.y, x2, y2, 2.2, h.color || '#fde047', 0.12);
+                for (const e of this.enemies) {
+                  if (!e.active) continue;
+                  if (segDist(e.x, e.y, h.x, h.y, x2, y2) < e.r + 4) {
+                    this.damageEnemy(e, h.dmg * st.dmg * 0.7, false, 0, 0);
+                  }
+                }
+              }
+            } else h.cd = 0.2;
+          }
+        } else if (h.cd <= 0) {
+          const t = this.nearestEnemy(h.x, h.y, 440);
+          if (t) {
+            h.cd = h.kind === 3 ? 0.95 : 0.7;
+            const ang = Math.atan2(t.y - h.y, t.x - h.x);
+            if (h.kind === 3) {
+              // laser beam
+              const x2 = h.x + Math.cos(ang) * 600, y2 = h.y + Math.sin(ang) * 600;
+              this.fx.beam(h.x, h.y, x2, y2, 3, '#5ce1ff', 0.14);
+              for (const e of this.enemies) {
+                if (!e.active) continue;
+                if (segDist(e.x, e.y, h.x, h.y, x2, y2) < e.r + 5) {
+                  this.damageEnemy(e, h.dmg * st.dmg, Math.random() < st.crit, 0, 0);
+                }
+              }
+              sfx.shoot('beam');
+            } else if (h.kind === 6) {
+              // shock arc
+              this.fx.beam(h.x, h.y, t.x, t.y, 2.6, '#c4b5fd', 0.16);
+              this.damageEnemy(t, h.dmg * st.dmg, false, 0, 0);
+              const t2 = this.nearestEnemy(t.x, t.y, 180, t.id);
+              if (t2) {
+                this.fx.beam(t.x, t.y, t2.x, t2.y, 2, '#c4b5fd', 0.12);
+                this.damageEnemy(t2, h.dmg * st.dmg * 0.55, false, 0, 0);
+              }
+              sfx.shoot('arc');
+            } else {
+              // projectile drone (basic / frost / fire)
+              const p = this.freeProj();
+              if (p) {
+                p.active = true; p.x = h.x; p.y = h.y;
+                p.vx = Math.cos(ang) * 520; p.vy = Math.sin(ang) * 520;
+                p.r = 3.6; p.dmg = h.dmg * st.dmg; p.pierce = h.kind === 5 ? 1 : 0; p.life = 1.1;
+                p.kind = 'bullet';
+                p.color = h.kind === 4 ? '#7dd3fc' : h.kind === 5 ? '#ff7a45' : '#8ef7ff';
+                p.rot = ang; p.spin = 8;
+                p.homing = st.homing + (h.kind === 4 ? 1.5 : 0); p.aoe = h.kind === 5 ? 22 : 0;
+                p.crit = Math.random() < st.crit;
+                if (p.crit) p.dmg *= st.critd;
+                p.hits.length = 0; p.bounced = st.ricochet; p.split = 0; p.trail = 0;
+              }
+              // frost drone applies freeze via a direct touch
+              if (h.kind === 4) t.frozen = Math.max(t.frozen, 0.55);
+              if (h.kind === 5) { t.burn = Math.max(t.burn, 1.2); t.burnDps = Math.max(t.burnDps, h.dmg * 0.3); }
+              sfx.shoot('bullet');
+            }
           } else h.cd = 0.2;
         }
-      } else if (h.kind === 0) {
-        // turret
-        h.life -= dt;
-        if (h.life <= 0) { h.active = false; this.fx.burst(h.x, h.y, 10, '#fbbf24', { spd: 160, size: 3, life: 0.4 }); continue; }
-        h.rot += dt * 2;
+      } else if (h.kind === 0 || h.kind === 9) {
+        // auto turret / sniper
         h.cd -= dt * st.droneRate;
         if (h.cd <= 0) {
-          const t = this.nearestEnemy(h.x, h.y, 460);
+          const range = h.kind === 9 ? 720 : 460;
+          const t = this.nearestEnemy(h.x, h.y, range);
           if (t) {
-            h.cd = 0.42;
+            h.cd = h.kind === 9 ? 1.1 : 0.42;
             const ang = Math.atan2(t.y - h.y, t.x - h.x);
             h.rot = ang;
-            const p = this.freeProj();
-            if (p) {
-              p.active = true; p.x = h.x + Math.cos(ang) * 12; p.y = h.y + Math.sin(ang) * 12;
-              p.vx = Math.cos(ang) * 640; p.vy = Math.sin(ang) * 640;
-              p.r = 4; p.dmg = h.dmg * st.dmg; p.pierce = 1; p.life = 1.1;
-              p.kind = 'bullet'; p.color = '#fbbf24'; p.rot = ang; p.spin = 8;
-              p.homing = st.homing; p.aoe = 0; p.crit = Math.random() < st.crit;
-              if (p.crit) p.dmg *= st.critd;
-              p.hits.length = 0; p.bounced = st.ricochet; p.split = 0; p.trail = 0;
+            if (h.kind === 9) {
+              const x2 = h.x + Math.cos(ang) * range, y2 = h.y + Math.sin(ang) * range;
+              this.fx.beam(h.x, h.y, x2, y2, 2.4, '#e2e8f0', 0.12);
+              for (const e of this.enemies) {
+                if (!e.active) continue;
+                if (segDist(e.x, e.y, h.x, h.y, x2, y2) < e.r + 4) {
+                  this.damageEnemy(e, h.dmg * st.dmg, Math.random() < st.crit, 0, 0);
+                }
+              }
+              sfx.shoot('beam');
+            } else {
+              const p = this.freeProj();
+              if (p) {
+                p.active = true; p.x = h.x + Math.cos(ang) * 12; p.y = h.y + Math.sin(ang) * 12;
+                p.vx = Math.cos(ang) * 640; p.vy = Math.sin(ang) * 640;
+                p.r = 4; p.dmg = h.dmg * st.dmg; p.pierce = 1; p.life = 1.1;
+                p.kind = 'bullet'; p.color = '#fbbf24'; p.rot = ang; p.spin = 8;
+                p.homing = st.homing; p.aoe = 0; p.crit = Math.random() < st.crit;
+                if (p.crit) p.dmg *= st.critd;
+                p.hits.length = 0; p.bounced = st.ricochet; p.split = 0; p.trail = 0;
+              }
             }
           } else h.cd = 0.2;
         }
-      } else if (h.kind === 2) {
-        // companion
+      } else if (h.kind === 10) {
+        // flamethrower — cone of fire
+        h.cd -= dt;
+        const t = this.nearestEnemy(h.x, h.y, 180);
+        if (t) h.rot = Math.atan2(t.y - h.y, t.x - h.x);
+        if (h.cd <= 0) {
+          h.cd = 0.12;
+          const ang = h.rot;
+          // spray particles + damage cone
+          this.fx.burst(h.x + Math.cos(ang) * 14, h.y + Math.sin(ang) * 14, 3, '#ff7a45', {
+            spd: 220, size: 3.5, life: 0.28, dir: ang, spread: 0.7, drag: 0.86,
+          });
+          for (const e of this.enemies) {
+            if (!e.active) continue;
+            const dx = e.x - h.x, dy = e.y - h.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist > 150 + e.r) continue;
+            const ea = Math.atan2(dy, dx);
+            let da = ea - ang;
+            while (da > Math.PI) da -= Math.PI * 2;
+            while (da < -Math.PI) da += Math.PI * 2;
+            if (Math.abs(da) < 0.55) {
+              this.damageEnemy(e, h.dmg * st.dmg * 0.35, false, Math.cos(ea) * 30, Math.sin(ea) * 30);
+              e.burn = Math.max(e.burn, 1.4); e.burnDps = Math.max(e.burnDps, h.dmg * 0.4);
+            }
+          }
+        }
+      } else if (h.kind === 11) {
+        // aura beacon — buffs player fire rate when nearby
+        h.rot += dt * 1.5;
+        const d = Math.hypot(h.x - this.px, h.y - this.py);
+        if (d < 160) {
+          nearBeacon = true;
+          if (Math.random() < dt * 6) this.fx.burst(h.x, h.y, 1, '#fde047', { spd: 40, size: 2, life: 0.4 });
+        }
+      } else if (h.kind === 2 || h.kind === 12 || h.kind === 13) {
+        // companion / wolf / golem
         const t = this.nearestEnemy(h.x, h.y, 900);
+        const speed = h.kind === 12 ? 320 : h.kind === 13 ? 140 : 250;
         const tx = t ? t.x : this.px + Math.cos(this.elapsed) * 70;
         const ty = t ? t.y : this.py + Math.sin(this.elapsed) * 70;
-        const a = Math.atan2(ty - h.y, tx - h.x);
-        h.vx += (Math.cos(a) * 250 - h.vx) * Math.min(1, dt * 3);
-        h.vy += (Math.sin(a) * 250 - h.vy) * Math.min(1, dt * 3);
+        // golem prefers to stay between player and nearest threat
+        let ax = tx, ay = ty;
+        if (h.kind === 13 && t) {
+          ax = this.px + (t.x - this.px) * 0.4;
+          ay = this.py + (t.y - this.py) * 0.4;
+        }
+        const a = Math.atan2(ay - h.y, ax - h.x);
+        h.vx += (Math.cos(a) * speed - h.vx) * Math.min(1, dt * 3);
+        h.vy += (Math.sin(a) * speed - h.vy) * Math.min(1, dt * 3);
         h.x += h.vx * dt; h.y += h.vy * dt;
-        h.rot += dt * 3;
+        h.rot += dt * (h.kind === 12 ? 5 : 2.5);
         h.cd -= dt;
-        if (h.cd <= 0 && t) {
+        // body damage on contact for wolf/golem
+        if (t && Math.hypot(t.x - h.x, t.y - h.y) < t.r + h.r) {
+          if (h.cd <= 0) {
+            h.cd = h.kind === 12 ? 0.35 : 0.55;
+            const ang = Math.atan2(t.y - h.y, t.x - h.x);
+            this.damageEnemy(t, h.dmg * st.dmg * (h.kind === 13 ? 1.3 : 0.9), false,
+              Math.cos(ang) * (h.kind === 13 ? 260 : 160), Math.sin(ang) * (h.kind === 13 ? 260 : 160));
+            this.fx.burst(h.x, h.y, 4, h.kind === 12 ? '#fb923c' : '#a8a29e', { spd: 140, size: 2.5, life: 0.25 });
+          }
+        } else if (h.kind === 2 && h.cd <= 0 && t) {
           h.cd = 0.5;
           const ang = Math.atan2(t.y - h.y, t.x - h.x);
           const p = this.freeProj();
@@ -1474,18 +1814,13 @@ export class Game {
         }
       }
     }
-    // companions
-    const wantComp = Math.floor(st.companion);
-    let ci = 0;
-    for (const h of this.helpers) {
-      if (!h.active && ci < wantComp) {
-        h.active = true; h.kind = 2; h.r = 13 * st.companionDmg; h.life = Infinity;
-        h.cd = 0; h.dmg = 12 * st.companionDmg; h.x = this.px; h.y = this.py; h.vx = h.vy = 0;
-        ci++;
-      }
+    // beacon haste buff
+    if (nearBeacon) {
+      // temporary fire-rate bump via timeScale-like effect on weapon CDs
+      for (let i = 0; i < this.wcd.length; i++) this.wcd[i] -= dt * 0.35;
     }
-    void dc;
   }
+
 
   private dropMine(x: number, y: number, delay = 0.35) {
     const m = this.freeMine();
@@ -1601,6 +1936,7 @@ export class Game {
     e.spin = d.boss ? 0.5 : rnd(-1.4, 1.4);
     e.flash = 0; e.atk = d.atk; e.atkT = d.atkCd * rnd(0.5, 1.2);
     e.windup = 0; e.state = 0; e.slow = 0; e.frozen = 0; e.hitCd = 0; e.age = 0;
+    e.burn = 0; e.burnDps = 0; e.poison = 0; e.poisonDps = 0; e.marked = 0; e.voided = 0;
     e.vx = e.vy = 0;
     if (d.boss) {
       this.fx.addShake(16);

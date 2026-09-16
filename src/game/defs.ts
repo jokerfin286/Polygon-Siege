@@ -144,6 +144,21 @@ export const UPGRADES: UpgDef[] = [
   S('aoe',    'Blast Radius', 'aoe',    0.15, 4, 2, '✺', '+15% explosion sizes'),
   S('haste',  'Adrenaline',   'haste',  0.08, 4, 1, '🌬', '+8% move & fire speed'),
 
+  // ---- perimeter multi-barrels (shape-native weapon arrays) ----
+  // Each level adds +1 barrel around the shape's rim (max 5 total).
+  S('barrels', 'Rim Mounts',  'barrels', 1, 4, 2, '⬡', '+1 weapon barrel on the shape perimeter (up to 5)'),
+  S('focus',   'Focus Fire',  'focus',   0.08, 3, 1, '◎', 'Perimeter barrels converge +8% tighter'),
+
+  // ---- elemental weapon infusions ----
+  S('fire',    'Incendiary',  'fire',    1, 3, 2, '🔥', 'Hits ignite foes — burn DoT stacks'),
+  S('firedmg', 'Hellfire',    'firedmg', 0.30, 3, 2, '🌋', '+30% burn damage & duration'),
+  S('frost',   'Cryo Core',   'frost',   1, 3, 2, '❄', 'Hits freeze enemies solid'),
+  S('frostpow','Absolute Zero','frostpow',0.25, 3, 2, '🧊', '+25% freeze chance & duration'),
+  S('shock',   'Storm Core',  'shock',   1, 3, 2, '⚡', 'Hits arc lightning to nearby foes'),
+  S('shockpow','Overcharge',  'shockpow',0.30, 3, 2, 'ϟ', '+30% lightning damage & jump range'),
+  S('poison',  'Venom Tips',  'poison',  1, 3, 2, '☠', 'Hits apply lingering poison'),
+  S('void',    'Void Mark',   'void',    1, 3, 3, '◉', 'Hits shred armor — foes take +dmg'),
+
   // ---- weapons ----
   { id: 'w_disc',    name: 'Discs',    kind: 'weapon', max: 1, rarity: 2, icon: '◎', weapon: 'disc',    desc: 'Equip: spinning piercing discs' },
   { id: 'w_laser',   name: 'Laser',    kind: 'weapon', max: 1, rarity: 2, icon: '╱', weapon: 'laser',   desc: 'Equip: instant piercing beam' },
@@ -158,7 +173,7 @@ export const UPGRADES: UpgDef[] = [
   { id: 'w_rail',    name: 'Railgun',  kind: 'weapon', max: 1, rarity: 3, icon: '⇶', weapon: 'rail',    desc: 'Equip: row-erasing charged slug' },
   { id: 'wslot',     name: 'Weapon Bay', kind: 'stat', max: 3, rarity: 3, icon: '🧰', stat: 'wslot', per: 1, desc: '+1 weapon slot (carry more weapons)' },
   { id: 'wpower',    name: 'Synergy',  kind: 'stat', stat: 'wpower', per: 0.15, max: 4, rarity: 2, icon: '🔗', desc: '+15% damage per extra weapon' },
-  { id: 'aux',       name: 'Auxiliary Fire', kind: 'stat', stat: 'aux', per: 1, max: 2, rarity: 3, icon: ' ⟳', desc: 'Secondary weapons fire automatically too' },
+  { id: 'aux',       name: 'Auxiliary Fire', kind: 'stat', stat: 'aux', per: 1, max: 2, rarity: 3, icon: '⟳', desc: 'Secondary weapons fire automatically too' },
 
   // ---- shape cores ----
   { id: 'shape_triangle', name: 'Core: Triangle', kind: 'shape', shape: 'triangle', max: 1, rarity: 2, icon: '▲', desc: 'Become a Triangle — fast, fragile, lasers' },
@@ -178,6 +193,19 @@ export const UPGRADES: UpgDef[] = [
   S('companion', 'Ally Shape',    'companion', 1,    3, 3, '◈', 'A friendly shape fights at your side'),
   S('companionDmg','Ally Power',  'companionDmg', 0.30, 3, 2, '💠', '+30% ally damage & size'),
   S('shieldorbs','Guard Frenzy',  'shieldorbs',0.20, 3, 1, '🌀', '+20% orbit speed & orbit damage'),
+  // new specialised helpers
+  S('laserDrone',  'Laser Wasp',    'laserDrone',  1, 3, 2, '◈', '+1 laser drone that fires piercing beams'),
+  S('frostDrone',  'Cryo Mite',     'frostDrone',  1, 3, 2, '❄', '+1 cryo drone that freezes on hit'),
+  S('fireDrone',   'Ember Scout',   'fireDrone',   1, 3, 2, '🔥', '+1 flame drone that scorches foes'),
+  S('shockDrone',  'Spark Bug',     'shockDrone',  1, 3, 2, '⚡', '+1 spark drone that chains lightning'),
+  S('healDrone',   'Medic Pod',     'healDrone',   1, 3, 2, '✚', '+1 medic drone that regenerates you'),
+  S('shieldDrone', 'Aegis Bit',     'shieldDrone', 1, 2, 3, '⬤', '+1 aegis drone that recharges your shield'),
+  S('sniper',      'Sniper Nest',   'sniper',      1, 3, 2, '◎', 'Deploy a long-range sniper turret'),
+  S('flamethrower','Incinerator',   'flamethrower',1, 3, 2, '♨', 'Deploy a short-range flamethrower turret'),
+  S('beacon',      'Aura Beacon',   'beacon',      1, 2, 3, '✧', 'Beacon boosts fire rate while nearby'),
+  S('wolf',        'Pack Leader',   'wolf',        1, 3, 2, '▲', '+1 aggressive wolf-shape companion'),
+  S('golem',       'Stone Golem',   'golem',       1, 2, 3, '■', '+1 tanky golem that draws fire'),
+  S('prism',       'Light Prism',   'prism',       1, 3, 2, '◆', '+1 orbiting prism that refracts beams'),
 
   // ---- mobility & defence ----
   { id: 'dash',    name: 'Dash Drive', kind: 'special', max: 1, rarity: 2, icon: '»', desc: 'UNLOCK DASH — burst forward (Space / button)' },
@@ -205,6 +233,8 @@ export const UPGRADES: UpgDef[] = [
   S('xpwave',   'Wisdom Burst',  'xpwave',   1,    2, 1, '✧', 'Level-ups blast XP gems outward'),
   S('combo',    'Combo Engine',  'combo',    0.5,  3, 2, '🔥', '+50% combo window & score scaling'),
   S('lucky',    'Lucky Draw',    'lucky',    0.4,  3, 1, '🍀', 'Better upgrade rarities appear'),
+  S('overheat', 'Overheat',      'overheat', 1,    2, 2, '♨', 'Fire rate ramps up while continuously shooting'),
+  S('mark',     'Hunter Mark',   'mark',     1,    3, 2, '◎', 'First hit marks foes for +25% damage'),
 ];
 
 function countTiers(): number {

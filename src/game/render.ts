@@ -555,6 +555,40 @@ function drawEnemies(g: Game, ctx: CanvasRenderingContext2D) {
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
+    // elemental status rings
+    if (e.burn > 0) {
+      ctx.globalAlpha = 0.35 + 0.25 * Math.sin(performance.now() / 80);
+      ctx.strokeStyle = '#ff7a45';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 4, 0, 6.2832); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    if (e.poison > 0) {
+      ctx.globalAlpha = 0.3;
+      ctx.strokeStyle = '#a3e635';
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 6, 0, 6.2832); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+    if (e.marked > 0) {
+      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = '#ffe066';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(e.x - e.r - 4, e.y); ctx.lineTo(e.x - e.r + 4, e.y);
+      ctx.moveTo(e.x, e.y - e.r - 4); ctx.lineTo(e.x, e.y - e.r + 4);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    if (e.voided > 0) {
+      ctx.globalAlpha = Math.min(0.5, e.voided * 0.12);
+      ctx.fillStyle = '#e879f9';
+      polyPath(ctx, e.x, e.y, e.r * 0.5, e.sides, e.rot);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
   }
 }
 
@@ -709,41 +743,64 @@ function drawOrbitals(g: Game, ctx: CanvasRenderingContext2D) {
 function drawHelpers(g: Game, ctx: CanvasRenderingContext2D) {
   for (const h of g.helpers) {
     if (!h.active) continue;
-    if (h.kind === 1) {
-      ctx.globalAlpha = 0.2; ctx.fillStyle = '#8ef7ff';
-      ctx.beginPath(); ctx.arc(h.x, h.y, h.r * 2, 0, 6.2832); ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = '#8ef7ff';
-      polyPath(ctx, h.x, h.y, h.r, 3, h.rot + performance.now() / 400);
-      ctx.fill();
-      ctx.fillStyle = '#04202b';
-      ctx.beginPath(); ctx.arc(h.x, h.y, h.r * 0.34, 0, 6.2832); ctx.fill();
-    } else if (h.kind === 0) {
-      const life = h.life < 4 ? 0.35 + 0.65 * Math.abs(Math.sin(h.life * 8)) : 1;
-      ctx.globalAlpha = life;
-      ctx.fillStyle = '#fbbf24';
+    const col = h.color || '#8ef7ff';
+    const lifeFade = (h.kind === 0 || h.kind === 9 || h.kind === 10 || h.kind === 11) && h.life < 4
+      ? 0.35 + 0.65 * Math.abs(Math.sin(h.life * 8)) : 1;
+    ctx.globalAlpha = lifeFade;
+
+    // glow
+    ctx.globalAlpha = 0.18 * lifeFade;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(h.x, h.y, h.r * 2.1, 0, 6.2832); ctx.fill();
+    ctx.globalAlpha = lifeFade;
+
+    if (h.kind === 0 || h.kind === 9) {
+      // turret / sniper — diamond with barrel
       polyPath(ctx, h.x, h.y, h.r, 4, Math.PI / 4);
-      ctx.fill();
-      ctx.strokeStyle = '#fff7d6';
-      ctx.lineWidth = 2.4;
+      ctx.fillStyle = col; ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(h.x, h.y);
-      ctx.lineTo(h.x + Math.cos(h.rot) * h.r * 1.7, h.y + Math.sin(h.rot) * h.r * 1.7);
+      ctx.lineTo(h.x + Math.cos(h.rot) * h.r * (h.kind === 9 ? 2.2 : 1.7), h.y + Math.sin(h.rot) * h.r * (h.kind === 9 ? 2.2 : 1.7));
       ctx.stroke();
-      ctx.globalAlpha = 1;
-    } else {
-      const sh = SHAPES.square;
-      ctx.globalAlpha = 0.22; ctx.fillStyle = '#7dfcd6';
-      ctx.beginPath(); ctx.arc(h.x, h.y, h.r * 2.1, 0, 6.2832); ctx.fill();
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = '#7dfcd6';
-      ctx.lineWidth = 2.4;
-      polyPath(ctx, h.x, h.y, h.r, sh.sides, h.rot);
+    } else if (h.kind === 10) {
+      // flamethrower
+      polyPath(ctx, h.x, h.y, h.r, 3, h.rot);
+      ctx.fillStyle = col; ctx.fill();
+      ctx.strokeStyle = '#ffd6a5'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(h.x, h.y);
+      ctx.lineTo(h.x + Math.cos(h.rot) * h.r * 1.8, h.y + Math.sin(h.rot) * h.r * 1.8);
       ctx.stroke();
-      ctx.fillStyle = hexA('#7dfcd6', 0.28);
-      polyPath(ctx, h.x, h.y, h.r, sh.sides, h.rot);
+    } else if (h.kind === 11) {
+      // beacon aura
+      ctx.globalAlpha = 0.12 * lifeFade;
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(h.x, h.y, 160, 0, 6.2832); ctx.stroke();
+      ctx.globalAlpha = lifeFade;
+      polyPath(ctx, h.x, h.y, h.r, 6, h.rot);
+      ctx.fillStyle = col; ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+    } else if (h.kind === 2 || h.kind === 12 || h.kind === 13) {
+      // companions
+      const sides = h.kind === 12 ? 3 : h.kind === 13 ? 4 : 4;
+      ctx.strokeStyle = col; ctx.lineWidth = 2.4;
+      polyPath(ctx, h.x, h.y, h.r, sides, h.rot);
+      ctx.stroke();
+      ctx.fillStyle = hexA(col, 0.3);
+      polyPath(ctx, h.x, h.y, h.r, sides, h.rot);
       ctx.fill();
+    } else {
+      // drones (triangle / diamond body)
+      const sides = h.kind === 14 ? 4 : 3;
+      ctx.fillStyle = col;
+      polyPath(ctx, h.x, h.y, h.r, sides, h.rot + performance.now() / 400);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(4,10,20,0.7)';
+      ctx.beginPath(); ctx.arc(h.x, h.y, h.r * 0.32, 0, 6.2832); ctx.fill();
     }
+    ctx.globalAlpha = 1;
   }
 }
 
@@ -774,14 +831,6 @@ function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   ctx.beginPath(); ctx.arc(g.px, g.py, r * 4.2, 0, 6.2832); ctx.fill();
   ctx.globalAlpha = 1;
 
-  // aim tick
-  ctx.strokeStyle = hexA(col, 0.45);
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(g.px + Math.cos(g.aimA) * (r + 6), g.py + Math.sin(g.aimA) * (r + 6));
-  ctx.lineTo(g.px + Math.cos(g.aimA) * (r + 16), g.py + Math.sin(g.aimA) * (r + 16));
-  ctx.stroke();
-
   // body
   ctx.globalAlpha = inv ? 0.4 : 1;
   ctx.fillStyle = hexA(col, 0.28);
@@ -794,6 +843,33 @@ function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   polyPath(ctx, g.px, g.py, r * 0.42, sh.sides, -rot * 1.6 + t);
   ctx.fill();
   ctx.globalAlpha = 1;
+
+  // perimeter multi-barrel mounts (Rim Mounts upgrade) — glowing hardpoints on the rim
+  const barrels = 1 + (g.stats?.barrels || 0);
+  if (barrels > 1 || true) {
+    const arc = Math.PI * (0.55 - (g.stats?.focus || 0) * 0.12);
+    for (let i = 0; i < barrels; i++) {
+      const tN = barrels === 1 ? 0 : (i / (barrels - 1) - 0.5);
+      const a = g.aimA + tN * arc * 2;
+      const bx = g.px + Math.cos(a) * (r + 3);
+      const by = g.py + Math.sin(a) * (r + 3);
+      // hardpoint
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(bx, by, 3.2, 0, 6.2832); ctx.fill();
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.arc(bx, by, 3.2, 0, 6.2832); ctx.stroke();
+      // barrel tip
+      ctx.strokeStyle = hexA(col, 0.7);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(bx, by);
+      ctx.lineTo(bx + Math.cos(a) * 9, by + Math.sin(a) * 9);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
 
   // shield
   if (g.shield > 0) {
