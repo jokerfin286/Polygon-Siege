@@ -1,4 +1,5 @@
 import { SHAPES, WEAPONS, polyPath } from './defs';
+import { t as tr, shapeName, weaponName } from '../i18n';
 import type { Game } from './engine';
 
 let bgGrad: CanvasGradient | null = null;
@@ -84,36 +85,324 @@ export function render(g: Game, tNow: number) {
   drawFlash(g, ctx);
 }
 
+const wrap = (v: number, m: number) => ((v % m) + m) % m;
+
+function drawGrid(g: Game, ctx: CanvasRenderingContext2D, t: number, inGame: boolean) {
+  const W = g.W, H = g.H;
+  const th = g.theme;
+  if (th.gridKind === 'none') return;
+  const scale = inGame ? g.viewScale : 1;
+  const ox = inGame ? -g.camX * scale : t * 6;
+  const oy = inGame ? -g.camY * scale : 0;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = th.grid;
+
+  if (th.gridKind === 'square') {
+    const step = 64 * scale;
+    const sx = wrap(ox, step), sy = wrap(oy, step);
+    ctx.beginPath();
+    for (let x = sx - step; x < W + step; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+    for (let y = sy - step; y < H + step; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    ctx.stroke();
+  } else if (th.gridKind === 'diag') {
+    const step = 74 * scale;
+    const s1 = wrap(ox + oy, step);
+    ctx.beginPath();
+    for (let d = s1 - step; d < W + H + step; d += step) {
+      ctx.moveTo(d, 0); ctx.lineTo(d - H, H);
+      ctx.moveTo(d - H, 0); ctx.lineTo(d, H);
+    }
+    ctx.stroke();
+  } else if (th.gridKind === 'hex') {
+    const R = 34 * scale;               // hex radius
+    const hw = Math.sqrt(3) * R;        // horizontal spacing
+    const vh = 1.5 * R;                 // vertical spacing
+    const sx = wrap(ox, hw), sy = wrap(oy, vh * 2);
+    ctx.beginPath();
+    for (let row = -1, y = sy - vh * 2; y < H + vh * 2; row++, y += vh) {
+      const off = (row & 1) ? hw / 2 : 0;
+      for (let x = sx - hw + off; x < W + hw; x += hw) {
+        for (let k = 0; k < 6; k++) {
+          const a = (k / 6) * Math.PI * 2 + Math.PI / 6;
+          const hx = x + Math.cos(a) * R, hy = y + Math.sin(a) * R;
+          if (k === 0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy);
+        }
+        ctx.closePath();
+      }
+    }
+    ctx.stroke();
+  } else if (th.gridKind === 'rings') {
+    // concentric rings anchored to the arena centre
+    const cx = inGame ? (g.worldW / 2 - g.camX) * scale : W / 2;
+    const cy = inGame ? (g.worldH / 2 - g.camY) * scale : H / 2;
+    const step = 78 * scale;
+    const maxR = Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy));
+    ctx.beginPath();
+    for (let r = step; r < maxR + step; r += step) { ctx.moveTo(cx + r, cy); ctx.arc(cx, cy, r, 0, 6.2832); }
+    ctx.stroke();
+    // radial spokes
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2 + t * 0.02;
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a) * maxR, cy + Math.sin(a) * maxR);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+}
+
+/** Big soft colour blobs that give each arena depth. */
+function drawFog(g: Game, ctx: CanvasRenderingContext2D, t: number, px: number, py: number, count: number) {
+  const W = g.W, H = g.H;
+  ctx.fillStyle = g.theme.fog;
+  for (let i = 0; i < count; i++) {
+    const r = (150 + i * 70);
+    const fx = wrap(W * (0.2 + i * 0.31) + Math.sin(t * 0.05 + i) * 60 - px * 0.05, W + r * 2) - r;
+    const fy = wrap(H * (0.25 + i * 0.27) + Math.cos(t * 0.04 + i * 2) * 50 - py * 0.05, H + r * 2) - r;
+    ctx.beginPath();
+    ctx.arc(fx, fy, r, 0, 6.2832);
+    ctx.fill();
+  }
+}
+
 function drawBackground(g: Game, ctx: CanvasRenderingContext2D, t: number, inGame: boolean) {
   const W = g.W, H = g.H;
+  const th = g.theme;
   const scale = inGame ? g.viewScale : 1;
-  const step = 64 * scale;
-  // grid scrolls with the camera in world space (projected to screen)
-  let ox = inGame ? (-g.camX * scale) % step : (t * 6) % step;
-  let oy = inGame ? (-g.camY * scale) % step : 0;
-  if (ox < 0) ox += step;
-  if (oy < 0) oy += step;
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = g.theme.grid;
-  ctx.beginPath();
-  for (let x = ox - step; x < W + step; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
-  for (let y = oy - step; y < H + step; y += step) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
-  ctx.stroke();
-
-  // parallax stars
-  ctx.fillStyle = g.theme.star;
-  const n = g.stars.length;
   const px = inGame ? g.camX * scale : 0;
   const py = inGame ? g.camY * scale : 0;
-  for (let i = 0; i < n; i++) {
-    const s = g.stars[i];
-    const sx = s.x - px * 0.14 * s.z;
-    const sy = s.y - py * 0.14 * s.z;
-    const sz = s.z * 1.7;
-    ctx.globalAlpha = 0.15 + 0.5 * s.z * (0.6 + 0.4 * Math.sin(t * 1.6 + i));
-    ctx.fillRect(((sx % W) + W) % W, ((sy % H) + H) % H, sz, sz);
+  const stars = g.stars;
+  const n = stars.length;
+
+  ctx.globalCompositeOperation = 'source-over';
+
+  /* ---- deep background layer (per style) ---- */
+  switch (th.style) {
+    case 'dunes': {
+      // low sun + layered heat dunes
+      const sunX = W * 0.68 - px * 0.03, sunY = H * 0.30 - py * 0.03;
+      const gr = ctx.createRadialGradient(sunX, sunY, 8, sunX, sunY, Math.min(W, H) * 0.55);
+      gr.addColorStop(0, 'rgba(255,170,70,0.30)');
+      gr.addColorStop(0.45, 'rgba(255,110,50,0.09)');
+      gr.addColorStop(1, 'rgba(255,90,40,0)');
+      ctx.fillStyle = gr;
+      ctx.fillRect(0, 0, W, H);
+      for (let b = 0; b < 3; b++) {
+        const baseY = H * (0.62 + b * 0.14) - py * (0.04 + b * 0.02);
+        ctx.fillStyle = `rgba(${60 - b * 10},${22 - b * 4},${26 - b * 6},${0.55 - b * 0.12})`;
+        ctx.beginPath();
+        ctx.moveTo(-10, H + 10);
+        for (let x = -10; x <= W + 10; x += 28) {
+          const y = baseY + Math.sin((x + px * 0.3) * 0.006 + b * 1.7 + t * 0.06) * (16 + b * 9);
+          ctx.lineTo(x, y);
+        }
+        ctx.lineTo(W + 10, H + 10);
+        ctx.closePath();
+        ctx.fill();
+      }
+      break;
+    }
+    case 'ice': {
+      drawFog(g, ctx, t, px, py, 2);
+      // large translucent ice shards
+      ctx.strokeStyle = 'rgba(190,230,255,0.13)';
+      ctx.fillStyle = 'rgba(150,210,255,0.055)';
+      ctx.lineWidth = 1.4;
+      for (let i = 0; i < 7; i++) {
+        const s = stars[(i * 13) % Math.max(1, n)] || { x: 0, y: 0, z: 0.5 };
+        const cx = wrap(s.x * 1.7 - px * 0.10, W + 300) - 150;
+        const cy = wrap(s.y * 1.7 - py * 0.10, H + 300) - 150;
+        const len = 70 + s.z * 110, wdt = 16 + s.z * 22;
+        const a = i * 1.1 + t * 0.03;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(a);
+        ctx.beginPath();
+        ctx.moveTo(0, -len); ctx.lineTo(wdt, 0); ctx.lineTo(0, len); ctx.lineTo(-wdt, 0);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+        ctx.restore();
+      }
+      break;
+    }
+    case 'bog': {
+      drawFog(g, ctx, t, px, py, 3);
+      // murky pools
+      ctx.fillStyle = 'rgba(30,90,55,0.16)';
+      for (let i = 0; i < 5; i++) {
+        const s = stars[(i * 23) % Math.max(1, n)] || { x: 0, y: 0, z: 0.5 };
+        const cx = wrap(s.x * 2.1 - px * 0.07, W + 400) - 200;
+        const cy = wrap(s.y * 2.1 - py * 0.07, H + 400) - 200;
+        const r = 60 + s.z * 90;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, r * 1.35, r * 0.72, i * 0.7, 0, 6.2832);
+        ctx.fill();
+      }
+      break;
+    }
+    case 'ruins': {
+      drawFog(g, ctx, t, px, py, 2);
+      // shattered rubble slabs
+      ctx.fillStyle = 'rgba(70,22,30,0.4)';
+      ctx.strokeStyle = 'rgba(255,90,110,0.10)';
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < 12; i++) {
+        const s = stars[(i * 17) % Math.max(1, n)] || { x: 0, y: 0, z: 0.5 };
+        const cx = wrap(s.x * 1.9 - px * 0.09, W + 260) - 130;
+        const cy = wrap(s.y * 1.9 - py * 0.09, H + 260) - 130;
+        const w = 40 + s.z * 90, h = 22 + s.z * 46;
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate((i % 5) * 0.21 - 0.4);
+        ctx.fillRect(-w / 2, -h / 2, w, h);
+        ctx.strokeRect(-w / 2, -h / 2, w, h);
+        ctx.restore();
+      }
+      break;
+    }
+    case 'hall': {
+      drawFog(g, ctx, t, px, py, 2);
+      // gilded columns
+      for (let i = 0; i < 6; i++) {
+        const cw = 46;
+        const cx = wrap(i * 190 + 60 - px * 0.16, W + 240) - 120;
+        const gr = ctx.createLinearGradient(cx - cw / 2, 0, cx + cw / 2, 0);
+        gr.addColorStop(0, 'rgba(250,204,21,0.015)');
+        gr.addColorStop(0.5, 'rgba(250,214,90,0.075)');
+        gr.addColorStop(1, 'rgba(250,204,21,0.015)');
+        ctx.fillStyle = gr;
+        ctx.fillRect(cx - cw / 2, 0, cw, H);
+        ctx.fillStyle = 'rgba(250,214,90,0.09)';
+        ctx.fillRect(cx - cw * 0.8, 0, cw * 1.6, 12);
+        ctx.fillRect(cx - cw * 0.8, H - 12, cw * 1.6, 12);
+      }
+      break;
+    }
+    case 'void': {
+      // slow silhouetted debris polygons
+      ctx.fillStyle = 'rgba(40,30,70,0.5)';
+      ctx.strokeStyle = 'rgba(180,150,255,0.09)';
+      ctx.lineWidth = 1.3;
+      for (let i = 0; i < 9; i++) {
+        const s = stars[(i * 29) % Math.max(1, n)] || { x: 0, y: 0, z: 0.5 };
+        const cx = wrap(s.x * 2.3 - px * 0.06, W + 320) - 160;
+        const cy = wrap(s.y * 2.3 - py * 0.06, H + 320) - 160;
+        const r = 26 + s.z * 74;
+        polyPath(ctx, cx, cy, r, 3 + (i % 5), t * 0.05 * (i % 2 ? 1 : -1) + i);
+        ctx.fill(); ctx.stroke();
+      }
+      break;
+    }
+    default: {
+      drawFog(g, ctx, t, px, py, 3);
+    }
+  }
+
+  /* ---- grid ---- */
+  drawGrid(g, ctx, t, inGame);
+
+  /* ---- ambient particle layer (per style) ---- */
+  ctx.globalCompositeOperation = 'lighter';
+  switch (th.style) {
+    case 'dunes': {
+      // embers rising
+      for (let i = 0; i < n; i++) {
+        const s = stars[i];
+        const sx = wrap(s.x - px * 0.2 * s.z + Math.sin(t * 0.7 + i) * 14, W);
+        const sy = wrap(s.y - t * (24 + s.z * 52) - py * 0.2 * s.z, H);
+        ctx.globalAlpha = (0.25 + 0.55 * s.z) * (0.55 + 0.45 * Math.sin(t * 3 + i));
+        ctx.fillStyle = th.mote;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 0.9 + s.z * 1.7, 0, 6.2832);
+        ctx.fill();
+      }
+      break;
+    }
+    case 'bog': {
+      // gas bubbles floating up
+      ctx.lineWidth = 1.1;
+      for (let i = 0; i < n; i++) {
+        const s = stars[i];
+        const r = 1.6 + s.z * 5.2;
+        const sx = wrap(s.x - px * 0.18 * s.z + Math.sin(t * 0.9 + i * 1.7) * 11, W);
+        const sy = wrap(s.y - t * (14 + s.z * 30) - py * 0.18 * s.z, H);
+        ctx.globalAlpha = 0.14 + 0.3 * s.z;
+        ctx.fillStyle = th.mote;
+        ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.2832); ctx.fill();
+        ctx.globalAlpha = 0.28 + 0.34 * s.z;
+        ctx.strokeStyle = th.mote;
+        ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.2832); ctx.stroke();
+      }
+      break;
+    }
+    case 'ice': {
+      // drifting snow
+      for (let i = 0; i < n; i++) {
+        const s = stars[i];
+        const sx = wrap(s.x + t * (10 + s.z * 26) - px * 0.22 * s.z, W);
+        const sy = wrap(s.y + t * (16 + s.z * 30) - py * 0.22 * s.z, H);
+        ctx.globalAlpha = 0.25 + 0.5 * s.z;
+        ctx.fillStyle = th.mote;
+        ctx.beginPath(); ctx.arc(sx, sy, 0.8 + s.z * 1.6, 0, 6.2832); ctx.fill();
+      }
+      break;
+    }
+    case 'ruins': {
+      // ash falling + scanlines
+      for (let i = 0; i < n; i++) {
+        const s = stars[i];
+        const sx = wrap(s.x + Math.sin(t * 0.5 + i) * 18 - px * 0.2 * s.z, W);
+        const sy = wrap(s.y + t * (18 + s.z * 34) - py * 0.2 * s.z, H);
+        ctx.globalAlpha = 0.16 + 0.34 * s.z;
+        ctx.fillStyle = th.mote;
+        ctx.fillRect(sx, sy, 1.4 + s.z, 1.4 + s.z);
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 0.045;
+      ctx.fillStyle = '#ff2d55';
+      for (let y = wrap(t * 26, 6); y < H; y += 6) ctx.fillRect(0, y, W, 1.5);
+      ctx.globalCompositeOperation = 'lighter';
+      break;
+    }
+    case 'hall': {
+      // slow golden pollen
+      for (let i = 0; i < n; i++) {
+        const s = stars[i];
+        const sx = wrap(s.x + Math.sin(t * 0.32 + i * 0.7) * 26 - px * 0.19 * s.z, W);
+        const sy = wrap(s.y - t * (7 + s.z * 15) - py * 0.19 * s.z, H);
+        ctx.globalAlpha = (0.2 + 0.5 * s.z) * (0.6 + 0.4 * Math.sin(t * 1.5 + i));
+        ctx.fillStyle = th.mote;
+        ctx.beginPath(); ctx.arc(sx, sy, 0.9 + s.z * 1.9, 0, 6.2832); ctx.fill();
+      }
+      break;
+    }
+    case 'void': {
+      for (let i = 0; i < n; i += 2) {
+        const s = stars[i];
+        const sx = wrap(s.x - px * 0.1 * s.z, W);
+        const sy = wrap(s.y - py * 0.1 * s.z, H);
+        ctx.globalAlpha = 0.1 + 0.35 * s.z * (0.5 + 0.5 * Math.sin(t * 0.9 + i));
+        ctx.fillStyle = th.star;
+        ctx.fillRect(sx, sy, s.z * 1.5, s.z * 1.5);
+      }
+      break;
+    }
+    default: {
+      // classic twinkling starfield
+      ctx.fillStyle = th.star;
+      for (let i = 0; i < n; i++) {
+        const s = stars[i];
+        const sx = wrap(s.x - px * 0.14 * s.z, W);
+        const sy = wrap(s.y - py * 0.14 * s.z, H);
+        ctx.globalAlpha = 0.15 + 0.5 * s.z * (0.6 + 0.4 * Math.sin(t * 1.6 + i));
+        ctx.fillRect(sx, sy, s.z * 1.7, s.z * 1.7);
+      }
+    }
   }
   ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 function drawMenuDeco(g: Game, ctx: CanvasRenderingContext2D, t: number) {
@@ -142,9 +431,19 @@ function drawMenuDeco(g: Game, ctx: CanvasRenderingContext2D, t: number) {
 }
 
 function drawArenaEdge(g: Game, ctx: CanvasRenderingContext2D) {
+  const lw = 3 / g.viewScale;
   ctx.strokeStyle = g.theme.edge;
-  ctx.lineWidth = 3 / g.viewScale;
+  ctx.lineWidth = lw;
+  ctx.setLineDash(g.theme.style === 'ruins' ? [34 / g.viewScale, 16 / g.viewScale] : []);
   ctx.strokeRect(0, 0, g.worldW, g.worldH);
+  ctx.setLineDash([]);
+  // inner accent rail
+  ctx.globalAlpha = 0.35;
+  ctx.lineWidth = lw * 0.5;
+  ctx.strokeStyle = g.theme.accent;
+  const i = 9 / g.viewScale;
+  ctx.strokeRect(i, i, g.worldW - i * 2, g.worldH - i * 2);
+  ctx.globalAlpha = 1;
 }
 
 function drawPickups(g: Game, ctx: CanvasRenderingContext2D) {
@@ -583,12 +882,12 @@ function drawHUD(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   ctx.fillText(fmt(g.score), W / 2, 42);
   ctx.font = `700 11px ${FONT}`;
   ctx.fillStyle = 'rgba(160,200,240,0.75)';
-  ctx.fillText('SCORE', W / 2, 58);
+  ctx.fillText(tr(g.lang, 'hud_score'), W / 2, 58);
   if (g.combo > 1) {
     const k = Math.min(1, g.comboT / (2.1 * (1 + (g.stats?.comboPow || 0) * 0.5)));
     ctx.font = `800 ${18 + Math.min(12, g.combo * 0.4)}px ${FONT}`;
     ctx.fillStyle = k > 0.35 ? '#ffe066' : '#ff9a3c';
-    ctx.fillText(`x${g.combo} COMBO`, W / 2, 80);
+    ctx.fillText(tr(g.lang, 'hud_combo', { n: g.combo }), W / 2, 80);
     ctx.fillStyle = 'rgba(255,224,102,0.35)';
     ctx.fillRect(W / 2 - 46, 86, 92 * k, 3);
   }
@@ -597,10 +896,10 @@ function drawHUD(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   ctx.textAlign = 'left';
   ctx.font = `700 13px ${FONT}`;
   ctx.fillStyle = 'rgba(150,190,235,0.85)';
-  ctx.fillText(`WAVE ${g.wave}`, pad, pad + 14);
+  ctx.fillText(tr(g.lang, 'hud_wave', { n: g.wave }), pad, pad + 14);
   ctx.font = `700 12px ${MONO}`;
   ctx.fillStyle = 'rgba(120,160,210,0.7)';
-  ctx.fillText(`${fmtTime(g.elapsed)}   LV ${g.level}`, pad, pad + 32);
+  ctx.fillText(`${fmtTime(g.elapsed)}   ${tr(g.lang, 'hud_lv', { n: g.level })}`, pad, pad + 32);
 
   // ---- hp bar (bottom-left) ----
   const bw = Math.min(250, W * 0.42), bh = 15;
@@ -627,8 +926,8 @@ function drawHUD(g: Game, ctx: CanvasRenderingContext2D, t: number) {
 
   // shape name
   ctx.font = `800 12px ${FONT}`;
-  ctx.fillStyle = SHAPES[g.shapeId].color;
-  ctx.fillText(SHAPES[g.shapeId].name.toUpperCase() + '  ·  ' + g.weapons.map((w) => WEAPONS[w].name).join(' + '), bx, by - 8);
+  ctx.fillStyle = g.playerColor || SHAPES[g.shapeId].color;
+  ctx.fillText(shapeName(g.lang, g.shapeId, SHAPES[g.shapeId].name).toUpperCase() + '  ·  ' + g.weapons.map((w) => weaponName(g.lang, w, WEAPONS[w].name)).join(' + '), bx, by - 8);
 
   // ---- xp bar (bottom, full width thin) ----
   const xy = H - 4;
@@ -671,10 +970,10 @@ function drawHUD(g: Game, ctx: CanvasRenderingContext2D, t: number) {
     ctx.textAlign = 'center';
     ctx.font = `700 13px ${FONT}`;
     ctx.fillStyle = 'rgba(180,220,255,0.75)';
-    ctx.fillText('DODGE THE RED SHAPES', W / 2, H * 0.62);
+    ctx.fillText(tr(g.lang, 'hint_dodge'), W / 2, H * 0.62);
     ctx.font = `600 12px ${FONT}`;
     ctx.fillStyle = 'rgba(140,180,220,0.6)';
-    ctx.fillText('DRAG anywhere · or WASD / Arrows', W / 2, H * 0.62 + 20);
+    ctx.fillText(tr(g.lang, 'hint_controls'), W / 2, H * 0.62 + 20);
     ctx.globalAlpha = 1;
     ctx.textAlign = 'left';
   }

@@ -6,6 +6,7 @@ import { FX } from './fx';
 import { sfx } from './sfx';
 import { saveScore, saveBest, type ScoreRow } from './storage';
 import { THEMES, type ThemeDef, type StartConfig } from './meta';
+import { t as tr, shapeName, type Lang } from '../i18n';
 
 export type Phase = 'menu' | 'playing' | 'paused' | 'levelup' | 'dead';
 
@@ -91,11 +92,12 @@ export class Game {
 
   // meta-progression config applied at run start
   startMods: Record<string, number> = {};
-  bonusRerolls = 0;
+  rerollTokens = 0;
   coinMul = 1;
   coinsEarned = 0;
   playerColor: string | null = null;
   theme: ThemeDef = THEMES[0];
+  lang: Lang = 'en';
 
   phase: Phase = 'menu';
   onState: (s: PublicState) => void;
@@ -172,7 +174,7 @@ export class Game {
 
   applyMeta(cfg: StartConfig) {
     this.startMods = { ...cfg.mods };
-    this.bonusRerolls = cfg.bonusRerolls;
+    this.rerollTokens = cfg.rerollTokens;
     this.coinMul = cfg.coinMul;
     this.playerColor = cfg.color;
     this.theme = cfg.theme;
@@ -244,7 +246,7 @@ export class Game {
     this.kills = 0; this.elapsed = 0; this.combo = 0; this.comboT = 0; this.bestCombo = 0;
     this.spawnT = 0.5; this.bossT = 150; this.bossCount = 0; this.wave = 1;
     this.invuln = 1; this.dashCd = 0; this.dashT = 0; this.hasDash = false;
-    this.pendingLevels = 0; this.choices = []; this.rerolls = 0;
+    this.pendingLevels = 0; this.choices = []; this.rerolls = this.rerollTokens;
     this.timeScale = 1; this.slowT = 0;
     this.turretT = 0; this.mineT = 0; this.bombT = 0;
     this.recompute();
@@ -252,7 +254,7 @@ export class Game {
     this.shield = this.shieldMax; this.shieldT = 0;
     this.centerCamera();
     this.phase = 'playing';
-    this.banner('SURVIVE', 1.6);
+    this.banner(tr(this.lang, 'bnr_survive'), 1.6);
     this.push();
   }
 
@@ -380,13 +382,18 @@ export class Game {
       picked.push({ key: 'hp:1', def: UPGRADES.find((u) => u.id === 'hp')!, level: 1 });
     }
     this.choices = picked;
-    this.rerolls = lucky + this.bonusRerolls;
   }
+
+  /** Called when a reroll token is consumed so the shell can persist the loss. */
+  onSpendReroll: (() => void) | null = null;
 
   reroll() {
     if (this.rerolls <= 0) return;
     this.rerolls--;
+    this.rerollTokens = this.rerolls;
+    this.onSpendReroll?.();
     this.rollChoices();
+    this.fx.burst(this.px, this.py, 14, '#c4b5fd', { spd: 240, size: 3, life: 0.4 });
     sfx.select();
     this.push();
   }
@@ -432,7 +439,7 @@ export class Game {
       this.fx.burst(this.px, this.py, 40, sh.color, { spd: 320, size: 4, life: 0.7 });
       this.fx.ring(this.px, this.py, 10, 130, 0.5, 6, sh.color);
       this.fx.addShake(10);
-      this.banner(sh.name.toUpperCase() + ' CORE', 1.4);
+      this.banner(tr(this.lang, 'bnr_core', { name: shapeName(this.lang, sh.id, sh.name).toUpperCase() }), 1.4);
     } else if (d.kind === 'special' && d.id === 'dash') {
       this.hasDash = true;
     }
@@ -467,7 +474,7 @@ export class Game {
     const newWave = Math.floor(this.elapsed / 30) + 1;
     if (newWave !== this.wave) {
       this.wave = newWave;
-      this.banner('WAVE ' + this.wave, 1.3);
+      this.banner(tr(this.lang, 'bnr_wave', { n: this.wave }), 1.3);
       sfx.buy();
     }
     if (this.bannerT > 0) this.bannerT -= dt;
@@ -638,7 +645,7 @@ export class Game {
         this.fx.doFlash('#ffffff', 0.8, 0.5);
         this.fx.ring(this.px, this.py, 10, 300, 0.7, 8, '#ffffff');
         this.fx.addShake(22);
-        this.banner('SECOND WIND!', 1.6);
+        this.banner(tr(this.lang, 'bnr_secondwind'), 1.6);
         for (const e of this.enemies) {
           if (!e.active) continue;
           const dd = Math.hypot(e.x - this.px, e.y - this.py);
@@ -662,7 +669,7 @@ export class Game {
     sfx.dead();
     const row: ScoreRow = {
       name: 'YOU', score: Math.floor(this.score), level: this.level, time: this.elapsed,
-      shape: SHAPES[this.shapeId].name, kills: this.kills, date: Date.now(),
+      shape: this.shapeId, kills: this.kills, date: Date.now(),
     };
     saveScore(row);
     if (Math.floor(this.score) > getBestCache()) { setBestCache(Math.floor(this.score)); saveBest(Math.floor(this.score)); }
@@ -1202,7 +1209,7 @@ export class Game {
       this.fx.doFlash('#ffffff', 0.5, 0.35);
       this.fx.hitStop = 0.14;
       sfx.explode();
-      this.banner('TYRANT DOWN', 1.8);
+      this.banner(tr(this.lang, 'bnr_tyrantDown'), 1.8);
     } else {
       this.fx.addShake(Math.min(4, 1 + e.r * 0.08));
       sfx.kill();
@@ -1598,7 +1605,7 @@ export class Game {
     if (d.boss) {
       this.fx.addShake(16);
       this.fx.doFlash('#ff2d55', 0.3, 0.4);
-      this.banner('⚠ TYRANT INBOUND', 2.2);
+      this.banner(tr(this.lang, 'bnr_tyrantIn'), 2.2);
       sfx.boss();
     }
   }

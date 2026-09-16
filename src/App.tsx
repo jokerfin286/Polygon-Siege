@@ -6,6 +6,7 @@ import { loadScores, loadMuted, saveMuted, loadBest, type ScoreRow } from './gam
 import { loadMeta, saveMeta, buildStartConfig, type Meta } from './game/meta';
 import { StartScreen, LevelUpScreen, PauseScreen, GameOverScreen, DashButton } from './ui/Screens';
 import { ShopModal } from './ui/Shop';
+import { loadLang, saveLang, type Lang } from './i18n';
 
 const INITIAL: PublicState = {
   phase: 'menu', score: 0, best: 0, level: 1, kills: 0, time: 0, hp: 100, maxHp: 100,
@@ -25,12 +26,14 @@ export default function App() {
   const [highlight, setHighlight] = useState(-1);
   const [meta, setMeta] = useState<Meta>(() => loadMeta());
   const [shopOpen, setShopOpen] = useState(false);
+  const [lang, setLang] = useState<Lang>(() => loadLang());
   const metaRef = useRef<Meta>(meta);
   metaRef.current = meta;
 
   /* ---------------- boot: game + loop + input ---------------- */
   useEffect(() => {
     setBestCache(loadBest());
+    try { document.documentElement.lang = loadLang(); } catch { /* ignore */ }
     const canvas = canvasRef.current!;
     let lastPhase: PublicState['phase'] = 'menu';
     const g = new Game(canvas, (s) => {
@@ -54,6 +57,14 @@ export default function App() {
       setSt(s);
     });
     gameRef.current = g;
+    g.onSpendReroll = () => {
+      setMeta((prev) => {
+        const nm = { ...prev, rerollStock: Math.max(0, (prev.rerollStock || 0) - 1) };
+        saveMeta(nm);
+        return nm;
+      });
+    };
+    g.lang = loadLang();
     g.applyMeta(buildStartConfig(metaRef.current));
     sfx.setMuted(loadMuted());
 
@@ -169,6 +180,15 @@ export default function App() {
     if (g) { g.applyMeta(buildStartConfig(m)); g.push(); }
   }, []);
 
+  const changeLang = useCallback((l: Lang) => {
+    saveLang(l);
+    setLang(l);
+    try { document.documentElement.lang = l; } catch { /* ignore */ }
+    const g = gameRef.current;
+    if (g) { g.lang = l; g.push(); }
+    sfx.select();
+  }, []);
+
   const openShop = useCallback(() => { sfx.resume(); sfx.select(); setShopOpen(true); }, []);
   const closeShop = useCallback(() => { setShopOpen(false); }, []);
 
@@ -227,15 +247,15 @@ export default function App() {
       {st.phase === 'playing' && <DashButton onPress={dash} ringRef={dashRing} fillRef={dashFill} />}
 
       {st.phase === 'menu' && !shopOpen && (
-        <StartScreen best={getBestCache()} scores={scores} coins={meta.coins} onPlay={play} onShop={openShop} />
+        <StartScreen lang={lang} best={getBestCache()} scores={scores} coins={meta.coins} onPlay={play} onShop={openShop} onLang={changeLang} />
       )}
       {st.phase === 'menu' && shopOpen && (
-        <ShopModal meta={meta} onChange={updateMeta} onClose={closeShop} />
+        <ShopModal lang={lang} meta={meta} onChange={updateMeta} onClose={closeShop} onLang={changeLang} />
       )}
-      {st.phase === 'levelup' && <LevelUpScreen st={st} onPick={pick} onReroll={reroll} />}
-      {st.phase === 'paused' && <PauseScreen st={st} onResume={resume} onRestart={play} onQuit={quit} />}
+      {st.phase === 'levelup' && <LevelUpScreen lang={lang} st={st} onPick={pick} onReroll={reroll} />}
+      {st.phase === 'paused' && <PauseScreen lang={lang} st={st} onResume={resume} onRestart={play} onQuit={quit} />}
       {st.phase === 'dead' && (
-        <GameOverScreen st={st} scores={scores} onRestart={play} onQuit={quit} highlight={highlight} />
+        <GameOverScreen lang={lang} st={st} scores={scores} onRestart={play} onQuit={quit} highlight={highlight} />
       )}
     </div>
   );

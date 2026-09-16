@@ -1,20 +1,19 @@
 import { useEffect } from 'react';
 import { SHAPES, WEAPONS, SHAPE_ORDER, ENEMIES, TOTAL_TIERS, UPGRADES, type UpgDef } from '../game/defs';
-
-type OwnedEntry = { def: UpgDef; lv: number };
 import type { PublicState } from '../game/engine';
 import type { ScoreRow } from '../game/storage';
+import {
+  t, type Lang, shapeName, shapeBlurb, enemyName, weaponName, upgName, upgDesc,
+} from '../i18n';
+
+type OwnedEntry = { def: UpgDef; lv: number };
 
 export const RARITY = [
-  { name: 'COMMON', text: 'text-slate-200', border: 'border-slate-500/50', bg: 'from-slate-500/12', glow: 'shadow-slate-900/40', dot: 'bg-slate-400' },
-  { name: 'RARE', text: 'text-cyan-300', border: 'border-cyan-400/50', bg: 'from-cyan-400/14', glow: 'shadow-cyan-500/20', dot: 'bg-cyan-400' },
-  { name: 'EPIC', text: 'text-violet-300', border: 'border-violet-400/60', bg: 'from-violet-500/16', glow: 'shadow-violet-500/25', dot: 'bg-violet-400' },
-  { name: 'LEGENDARY', text: 'text-amber-300', border: 'border-amber-400/70', bg: 'from-amber-400/18', glow: 'shadow-amber-500/30', dot: 'bg-amber-400' },
+  { text: 'text-slate-200', border: 'border-slate-500/50', bg: 'from-slate-500/12', glow: 'shadow-slate-900/40', dot: 'bg-slate-400' },
+  { text: 'text-cyan-300', border: 'border-cyan-400/50', bg: 'from-cyan-400/14', glow: 'shadow-cyan-500/20', dot: 'bg-cyan-400' },
+  { text: 'text-violet-300', border: 'border-violet-400/60', bg: 'from-violet-500/16', glow: 'shadow-violet-500/25', dot: 'bg-violet-400' },
+  { text: 'text-amber-300', border: 'border-amber-400/70', bg: 'from-amber-400/18', glow: 'shadow-amber-500/30', dot: 'bg-amber-400' },
 ];
-
-export const KIND_LABEL: Record<string, string> = {
-  stat: 'UPGRADE', weapon: 'WEAPON', shape: 'SHAPE CORE', helper: 'HELPER', special: 'SPECIAL',
-};
 
 function ShapeIcon({ sides, color, size = 26, rot = 0 }: { sides: number; color: string; size?: number; rot?: number }) {
   const c = size / 2;
@@ -43,9 +42,30 @@ function ShapeGlyph({ id, size = 22 }: { id: string; size?: number }) {
   return <ShapeIcon sides={s.sides} color={s.color} size={size} />;
 }
 
+export function LangToggle({ lang, onChange, className = '' }: { lang: Lang; onChange: (l: Lang) => void; className?: string }) {
+  return (
+    <div className={`flex overflow-hidden rounded-xl border border-white/12 bg-black/45 backdrop-blur-sm ${className}`}>
+      {(['en', 'ru'] as Lang[]).map((l) => (
+        <button
+          key={l}
+          onClick={() => onChange(l)}
+          className={`px-2.5 py-1.5 font-display text-[11px] font-bold tracking-wider transition ${
+            lang === l ? 'bg-cyan-400/25 text-cyan-100' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          {l === 'en' ? 'EN' : 'RU'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ------------------------------------------------------- */
 
-export function StartScreen({ best, scores, coins, onPlay, onShop }: { best: number; scores: ScoreRow[]; coins: number; onPlay: () => void; onShop: () => void }) {
+export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang }: {
+  lang: Lang; best: number; scores: ScoreRow[]; coins: number;
+  onPlay: () => void; onShop: () => void; onLang: (l: Lang) => void;
+}) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); onPlay(); }
@@ -58,15 +78,12 @@ export function StartScreen({ best, scores, coins, onPlay, onShop }: { best: num
     <div className="absolute inset-0 flex items-center justify-center overflow-hidden px-3 py-4">
       <div className="glass scroll-thin anim-in max-h-full w-full max-w-4xl overflow-y-auto rounded-3xl border border-cyan-400/20 p-5 shadow-[0_0_80px_rgba(56,245,224,0.12)] sm:p-8">
         <div className="text-center">
-          <div className="mb-1 font-display text-[10px] tracking-[0.45em] text-cyan-300/70">
-            GEOMETRIC SURVIVAL · {TOTAL_TIERS} UPGRADES
+          <div className="mb-1 font-display text-[10px] tracking-[0.35em] text-cyan-300/70">
+            {t(lang, 'tagline', { n: TOTAL_TIERS })}
           </div>
-          <h1 className="font-display title-shine text-4xl font-black leading-none sm:text-6xl">POLYGON</h1>
-          <h1 className="font-display title-shine -mt-1 text-4xl font-black leading-none sm:text-6xl">SIEGE</h1>
-          <p className="mx-auto mt-3 max-w-md text-sm text-slate-300/80 sm:text-base">
-            You are a shape. The red ones are coming. Absorb new cores, mount new weapons,
-            recruit helpers — and out-shape them all.
-          </p>
+          <h1 className="font-display title-shine text-4xl font-black leading-none sm:text-6xl">{t(lang, 'title1')}</h1>
+          <h1 className="font-display title-shine -mt-1 text-4xl font-black leading-none sm:text-6xl">{t(lang, 'title2')}</h1>
+          <p className="mx-auto mt-3 max-w-md text-sm text-slate-300/80 sm:text-base">{t(lang, 'intro')}</p>
         </div>
 
         <div className="mt-5 flex flex-col items-center gap-3">
@@ -74,34 +91,35 @@ export function StartScreen({ best, scores, coins, onPlay, onShop }: { best: num
             onClick={onPlay}
             className="anim-pulse group relative w-full max-w-xs rounded-2xl border border-cyan-300/60 bg-gradient-to-b from-cyan-400/25 to-cyan-600/10 px-8 py-4 font-display text-xl font-black tracking-widest text-cyan-100 transition active:scale-[0.97] hover:from-cyan-300/35"
           >
-            ▶ PLAY
+            {t(lang, 'play')}
             <span className="mt-0.5 block text-[10px] font-semibold tracking-[0.3em] text-cyan-200/60">
-              {best > 0 ? `BEST ${best.toLocaleString()}` : 'FIRST RUN'}
+              {best > 0 ? t(lang, 'best', { n: best.toLocaleString() }) : t(lang, 'firstRun')}
             </span>
           </button>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-center gap-2">
             <button
               onClick={onShop}
               className="flex items-center gap-2 rounded-2xl border border-amber-400/40 bg-amber-400/10 px-5 py-2.5 font-display text-sm font-bold tracking-widest text-amber-200 transition active:scale-95 hover:bg-amber-400/20"
             >
-              🛒 ARMORY
+              {t(lang, 'armory')}
             </button>
             <div className="flex items-center gap-1.5 rounded-2xl border border-white/10 bg-black/30 px-4 py-2.5">
               <span className="text-base">🪙</span>
               <span className="tnum font-display text-sm font-bold text-amber-300">{coins.toLocaleString()}</span>
             </div>
+            <LangToggle lang={lang} onChange={onLang} />
           </div>
           <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
-            <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">WASD</kbd> / <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">↑↓←→</kbd> move</span>
-            <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">SPACE</kbd> dash</span>
-            <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">ESC</kbd> pause</span>
-            <span className="text-cyan-300/80">TOUCH: drag anywhere to move</span>
+            <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">WASD</kbd> / <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">↑↓←→</kbd> {t(lang, 'move')}</span>
+            <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">SPACE</kbd> {t(lang, 'dash')}</span>
+            <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">ESC</kbd> {t(lang, 'pause')}</span>
+            <span className="text-cyan-300/80">{t(lang, 'touchHint')}</span>
           </div>
         </div>
 
         <div className="mt-6 grid gap-4 sm:grid-cols-2">
           <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-            <h3 className="font-display text-xs tracking-[0.25em] text-cyan-300/80">YOUR CORES</h3>
+            <h3 className="font-display text-xs tracking-[0.25em] text-cyan-300/80">{t(lang, 'yourCores')}</h3>
             <div className="mt-3 space-y-1.5">
               {SHAPE_ORDER.map((id) => {
                 const s = SHAPES[id];
@@ -109,12 +127,12 @@ export function StartScreen({ best, scores, coins, onPlay, onShop }: { best: num
                   <div key={id} className="flex items-center gap-2.5 rounded-lg bg-white/[0.03] px-2 py-1.5">
                     <ShapeGlyph id={id} size={22} />
                     <div className="min-w-0 flex-1">
-                      <div className="text-[13px] font-bold leading-tight" style={{ color: s.color }}>{s.name}</div>
-                      <div className="truncate text-[10.5px] leading-tight text-slate-400">{s.blurb}</div>
+                      <div className="text-[13px] font-bold leading-tight" style={{ color: s.color }}>{shapeName(lang, id, s.name)}</div>
+                      <div className="truncate text-[10.5px] leading-tight text-slate-400">{shapeBlurb(lang, id, s.blurb)}</div>
                     </div>
                     <div className="shrink-0 text-right text-[9.5px] leading-tight text-slate-500">
-                      <div>HP {s.hp}</div>
-                      <div>{s.speed.toFixed(0)} spd</div>
+                      <div>{t(lang, 'hp')} {s.hp}</div>
+                      <div>{s.speed.toFixed(0)} {t(lang, 'spd')}</div>
                     </div>
                   </div>
                 );
@@ -124,45 +142,41 @@ export function StartScreen({ best, scores, coins, onPlay, onShop }: { best: num
 
           <div className="flex flex-col gap-4">
             <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-              <h3 className="font-display text-xs tracking-[0.25em] text-rose-300/80">THE RED SIEGE</h3>
+              <h3 className="font-display text-xs tracking-[0.25em] text-rose-300/80">{t(lang, 'theRedSiege')}</h3>
               <div className="mt-3 grid grid-cols-2 gap-1.5">
                 {Object.values(ENEMIES).map((e) => (
                   <div key={e.id} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-2 py-1.5">
                     <ShapeIcon sides={e.sides} color={e.color} size={20} />
                     <div className="min-w-0">
-                      <div className="truncate text-[11.5px] font-bold leading-tight" style={{ color: e.color }}>{e.name}</div>
-                      <div className="text-[9.5px] leading-tight text-slate-500">
-                        {e.atk === 'melee' ? 'charges' : e.atk === 'laser' ? 'lasers' : e.atk === 'bullets' ? 'bullets' : e.atk === 'radial' ? 'bullet ring' : e.atk === 'slam' ? 'shockwave' : e.atk === 'spawn' ? 'spawns' : 'melee'}
-                      </div>
+                      <div className="truncate text-[11.5px] font-bold leading-tight" style={{ color: e.color }}>{enemyName(lang, e.id, e.name)}</div>
+                      <div className="text-[9.5px] leading-tight text-slate-500">{t(lang, 'atk_' + e.atk)}</div>
                       <div className="flex items-center gap-0.5 text-[9.5px] font-bold leading-tight text-emerald-400">
                         <span className="inline-block h-1.5 w-1.5 rotate-45 bg-emerald-400" />
-                        {e.xp} XP
+                        {e.xp} {t(lang, 'xpShort')}
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
-            <HighScores scores={scores} compact />
+            <HighScores lang={lang} scores={scores} />
           </div>
         </div>
-        <p className="mt-4 text-center text-[10px] text-slate-500">
-          Enemies scale forever. The first TYRANT arrives at 2:30. Good luck.
-        </p>
+        <p className="mt-4 text-center text-[10px] text-slate-500">{t(lang, 'footer')}</p>
       </div>
     </div>
   );
 }
 
-export function HighScores({ scores, compact = false, highlight = -1 }: { scores: ScoreRow[]; compact?: boolean; highlight?: number }) {
+export function HighScores({ lang, scores, highlight = -1 }: { lang: Lang; scores: ScoreRow[]; highlight?: number }) {
   return (
-    <div className={`rounded-2xl border border-white/10 bg-black/25 p-4 ${compact ? '' : ''}`}>
+    <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
       <div className="flex items-baseline justify-between">
-        <h3 className="font-display text-xs tracking-[0.25em] text-amber-300/80">HIGH SCORES</h3>
-        <span className="text-[10px] text-slate-500">LOCAL</span>
+        <h3 className="font-display text-xs tracking-[0.25em] text-amber-300/80">{t(lang, 'highScores')}</h3>
+        <span className="text-[10px] text-slate-500">{t(lang, 'local')}</span>
       </div>
       {scores.length === 0 ? (
-        <p className="mt-3 text-center text-xs text-slate-500">No runs yet. Make history.</p>
+        <p className="mt-3 text-center text-xs text-slate-500">{t(lang, 'noRuns')}</p>
       ) : (
         <div className="scroll-thin mt-2 max-h-44 overflow-y-auto pr-1">
           <table className="w-full text-[11.5px]">
@@ -171,8 +185,8 @@ export function HighScores({ scores, compact = false, highlight = -1 }: { scores
                 <tr key={i} className={`border-b border-white/5 last:border-0 ${i === highlight ? 'text-amber-300' : 'text-slate-300'}`}>
                   <td className="w-6 py-1 font-mono text-slate-500">{i + 1}</td>
                   <td className="py-1"><span className="tnum font-bold">{s.score.toLocaleString()}</span></td>
-                  <td className="py-1 text-right text-slate-400">Lv{s.level}</td>
-                  <td className="py-1 pl-2 text-right text-slate-500">{s.shape}</td>
+                  <td className="py-1 text-right text-slate-400">{t(lang, 'lv')}{s.level}</td>
+                  <td className="py-1 pl-2 text-right text-slate-500">{SHAPES[s.shape] ? shapeName(lang, s.shape, SHAPES[s.shape].name) : s.shape}</td>
                   <td className="py-1 pl-2 text-right font-mono text-slate-500">{Math.floor(s.time / 60)}:{String(Math.floor(s.time % 60)).padStart(2, '0')}</td>
                 </tr>
               ))}
@@ -186,7 +200,9 @@ export function HighScores({ scores, compact = false, highlight = -1 }: { scores
 
 /* ------------------------------------------------------- */
 
-export function LevelUpScreen({ st, onPick, onReroll }: { st: PublicState; onPick: (k: string) => void; onReroll: () => void }) {
+export function LevelUpScreen({ lang, st, onPick, onReroll }: {
+  lang: Lang; st: PublicState; onPick: (k: string) => void; onReroll: () => void;
+}) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key >= '1' && e.key <= '3') {
@@ -202,8 +218,8 @@ export function LevelUpScreen({ st, onPick, onReroll }: { st: PublicState; onPic
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#04070f]/78 px-3 py-4 backdrop-blur-[3px]">
       <div className="anim-slam text-center">
-        <div className="font-display text-[10px] tracking-[0.5em] text-cyan-300/70">LEVEL {st.level}</div>
-        <h2 className="font-display title-shine text-3xl font-black sm:text-4xl">EVOLVE</h2>
+        <div className="font-display text-[10px] tracking-[0.5em] text-cyan-300/70">{t(lang, 'levelN', { n: st.level })}</div>
+        <h2 className="font-display title-shine text-3xl font-black sm:text-4xl">{t(lang, 'evolve')}</h2>
       </div>
       <div className="mt-4 grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-3" key={st.choices.map((c) => c.key).join('|')}>
         {st.choices.map((c, i) => {
@@ -226,7 +242,7 @@ export function LevelUpScreen({ st, onPick, onReroll }: { st: PublicState; onPic
                       : <span>{c.def.icon}</span>}
                 </div>
                 <div className="text-right">
-                  <div className={`font-display text-[9px] tracking-[0.2em] ${r.text}`}>{r.name}</div>
+                  <div className={`font-display text-[9px] tracking-[0.2em] ${r.text}`}>{t(lang, 'rarity_' + c.def.rarity)}</div>
                   <div className="mt-1 flex justify-end gap-0.5">
                     {Array.from({ length: c.def.max }).map((_, k) => (
                       <span key={k} className={`h-1.5 w-1.5 rounded-full ${k < c.level ? r.dot : 'bg-white/15'}`} />
@@ -234,11 +250,11 @@ export function LevelUpScreen({ st, onPick, onReroll }: { st: PublicState; onPic
                   </div>
                 </div>
               </div>
-              <div className="mt-2.5 font-display text-[9px] tracking-[0.22em] text-slate-400">{KIND_LABEL[c.def.kind]}</div>
-              <h3 className="font-display text-lg font-bold leading-tight text-white">{c.def.name}</h3>
-              <p className="mt-1 flex-1 text-[13px] leading-snug text-slate-300/90">{c.def.desc}</p>
+              <div className="mt-2.5 font-display text-[9px] tracking-[0.22em] text-slate-400">{t(lang, 'kind_' + c.def.kind)}</div>
+              <h3 className="font-display text-lg font-bold leading-tight text-white">{upgName(lang, c.def.id, c.def.name)}</h3>
+              <p className="mt-1 flex-1 text-[13px] leading-snug text-slate-300/90">{upgDesc(lang, c.def.id, c.def.desc)}</p>
               <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-2 text-[10px] text-slate-500">
-                <span>LV {c.level}/{c.def.max}</span>
+                <span>{t(lang, 'lv')} {c.level}/{c.def.max}</span>
                 <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-slate-300">[{i + 1}]</span>
               </div>
             </button>
@@ -248,9 +264,18 @@ export function LevelUpScreen({ st, onPick, onReroll }: { st: PublicState; onPic
       <button
         onClick={onReroll}
         disabled={st.rerolls <= 0}
-        className="mt-4 rounded-xl border border-white/15 bg-white/5 px-5 py-2 text-xs font-bold tracking-widest text-slate-300 transition enabled:hover:bg-white/10 disabled:opacity-30"
+        className="mt-4 flex items-center gap-2 rounded-xl border border-violet-400/40 bg-violet-500/15 px-5 py-2 text-xs font-bold tracking-widest text-violet-200 transition enabled:hover:bg-violet-500/25 disabled:border-white/10 disabled:bg-white/5 disabled:text-slate-500"
       >
-        ⟳ REROLL ({st.rerolls})
+        {st.rerolls > 0 ? (
+          <>
+            {t(lang, 'reroll')}
+            <span className="flex gap-0.5">
+              {Array.from({ length: st.rerolls }).map((_, k) => (
+                <span key={k} className="h-2 w-2 rounded-full bg-violet-300" />
+              ))}
+            </span>
+          </>
+        ) : t(lang, 'rerollEmpty')}
       </button>
     </div>
   );
@@ -260,22 +285,22 @@ export function LevelUpScreen({ st, onPick, onReroll }: { st: PublicState; onPic
 
 const UPG_BY_ID = new Map(UPGRADES.map((u) => [u.id, u]));
 
-const KIND_ORDER: { kind: string; label: string; color: string }[] = [
-  { kind: 'stat', label: 'UPGRADES', color: 'text-slate-200' },
-  { kind: 'weapon', label: 'WEAPONS', color: 'text-cyan-300' },
-  { kind: 'shape', label: 'SHAPE CORES', color: 'text-violet-300' },
-  { kind: 'helper', label: 'HELPERS', color: 'text-emerald-300' },
-  { kind: 'special', label: 'SPECIALS', color: 'text-amber-300' },
+const KIND_ORDER: { kind: string; color: string }[] = [
+  { kind: 'stat', color: 'text-slate-200' },
+  { kind: 'weapon', color: 'text-cyan-300' },
+  { kind: 'shape', color: 'text-violet-300' },
+  { kind: 'helper', color: 'text-emerald-300' },
+  { kind: 'special', color: 'text-amber-300' },
 ];
 
-export function UpgradeList({ owned, maxRows }: { owned: Record<string, number>; maxRows?: number }) {
+export function UpgradeList({ lang, owned, maxRows }: { lang: Lang; owned: Record<string, number>; maxRows?: number }) {
   const entries: OwnedEntry[] = Object.entries(owned)
     .map(([id, lv]) => ({ def: UPG_BY_ID.get(id) as UpgDef, lv }))
     .filter((e) => e.def && e.lv > 0)
     .sort((a, b) => (b.def.rarity - a.def.rarity) || a.def.name.localeCompare(b.def.name));
 
   if (entries.length === 0) {
-    return <p className="py-3 text-center text-xs text-slate-500">No upgrades yet — level up to pick some.</p>;
+    return <p className="py-3 text-center text-xs text-slate-500">{t(lang, 'noUpgradesYet')}</p>;
   }
 
   let shown = entries;
@@ -283,17 +308,17 @@ export function UpgradeList({ owned, maxRows }: { owned: Record<string, number>;
 
   return (
     <div className="space-y-2.5">
-      {KIND_ORDER.map(({ kind, label, color }) => {
+      {KIND_ORDER.map(({ kind, color }) => {
         const group = shown.filter((e) => e.def.kind === kind);
         if (group.length === 0) return null;
         return (
           <div key={kind}>
-            <div className={`font-display text-[9.5px] tracking-[0.22em] ${color}`}>{label}</div>
+            <div className={`font-display text-[9.5px] tracking-[0.22em] ${color}`}>{t(lang, 'grp_' + kind)}</div>
             <div className="mt-1 flex flex-wrap gap-1.5">
               {group.map(({ def, lv }) => (
                 <div
                   key={def.id}
-                  title={def.desc}
+                  title={upgDesc(lang, def.id, def.desc)}
                   className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1"
                 >
                   {def.kind === 'shape' && def.shape
@@ -301,11 +326,9 @@ export function UpgradeList({ owned, maxRows }: { owned: Record<string, number>;
                     : def.weapon
                       ? <span style={{ color: WEAPONS[def.weapon].color }} className="text-[13px] leading-none">{WEAPONS[def.weapon].icon}</span>
                       : <span className="text-[12px] leading-none">{def.icon}</span>}
-                  <span className="text-[11.5px] font-bold leading-none text-slate-100">{def.name}</span>
+                  <span className="text-[11.5px] font-bold leading-none text-slate-100">{upgName(lang, def.id, def.name)}</span>
                   {def.max > 1 && (
-                    <span className="rounded bg-white/10 px-1 font-mono text-[9.5px] leading-tight text-slate-300">
-                      {lv}/{def.max}
-                    </span>
+                    <span className="rounded bg-white/10 px-1 font-mono text-[9.5px] leading-tight text-slate-300">{lv}/{def.max}</span>
                   )}
                 </div>
               ))}
@@ -314,7 +337,7 @@ export function UpgradeList({ owned, maxRows }: { owned: Record<string, number>;
         );
       })}
       {entries.length > shown.length && (
-        <div className="text-center text-[10px] text-slate-500">+{entries.length - shown.length} more…</div>
+        <div className="text-center text-[10px] text-slate-500">{t(lang, 'more', { n: entries.length - shown.length })}</div>
       )}
     </div>
   );
@@ -329,45 +352,56 @@ function Row({ label, value, color }: { label: string; value: string | number; c
   );
 }
 
-export function PauseScreen({ st, onResume, onRestart, onQuit }: { st: PublicState; onResume: () => void; onRestart: () => void; onQuit: () => void }) {
+export function PauseScreen({ lang, st, onResume, onRestart, onQuit }: {
+  lang: Lang; st: PublicState; onResume: () => void; onRestart: () => void; onQuit: () => void;
+}) {
   const totalTiers = Object.values(st.owned).reduce((a, b) => a + b, 0);
   return (
     <div className="absolute inset-0 flex items-center justify-center overflow-hidden bg-[#04070f]/85 px-3 py-4 backdrop-blur-[3px]">
       <div className="anim-in glass scroll-thin max-h-full w-full max-w-md overflow-y-auto rounded-3xl border border-cyan-400/25 p-5">
         <div className="flex items-baseline justify-between">
-          <h2 className="font-display text-2xl font-black tracking-widest text-cyan-100">PAUSED</h2>
-          <span className="font-mono text-[10px] tracking-widest text-slate-500">ESC TO RESUME</span>
+          <h2 className="font-display text-2xl font-black tracking-widest text-cyan-100">{t(lang, 'paused')}</h2>
+          <span className="font-mono text-[10px] tracking-widest text-slate-500">{t(lang, 'escResume')}</span>
         </div>
 
         <div className="mt-3 grid grid-cols-4 gap-2">
-          <Row label="SCORE" value={st.score.toLocaleString()} />
-          <Row label="LEVEL" value={st.level} />
-          <Row label="KILLS" value={st.kills} />
-          <Row label="TIERS" value={totalTiers} />
+          <Row label={t(lang, 'score')} value={st.score.toLocaleString()} />
+          <Row label={t(lang, 'level')} value={st.level} />
+          <Row label={t(lang, 'kills')} value={st.kills} />
+          <Row label={t(lang, 'tiers')} value={totalTiers} />
         </div>
 
         <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
-          <span className="text-[9.5px] tracking-[0.18em] text-slate-500">SHAPE</span>
+          <span className="text-[9.5px] tracking-[0.18em] text-slate-500">{t(lang, 'shape')}</span>
           <ShapeGlyph id={st.shapeId} size={18} />
-          <span className="font-display text-sm font-bold" style={{ color: SHAPES[st.shapeId].color }}>{SHAPES[st.shapeId].name}</span>
-          <span className="ml-auto text-[10px] text-slate-500">HP {Math.ceil(st.hp)}/{Math.round(st.maxHp)}</span>
+          <span className="font-display text-sm font-bold" style={{ color: SHAPES[st.shapeId].color }}>
+            {shapeName(lang, st.shapeId, SHAPES[st.shapeId].name)}
+          </span>
+          <span className="ml-auto text-[10px] text-slate-500">{t(lang, 'hp')} {Math.ceil(st.hp)}/{Math.round(st.maxHp)}</span>
         </div>
+
+        {st.rerolls > 0 && (
+          <div className="mt-2 flex items-center gap-2 rounded-xl border border-violet-400/25 bg-violet-500/10 px-3 py-1.5">
+            <span className="text-[13px]">⟳</span>
+            <span className="text-[11px] font-bold text-violet-200">{t(lang, 'rerollStock')}: {st.rerolls}</span>
+          </div>
+        )}
 
         <div className="mt-4">
           <div className="flex items-baseline justify-between border-b border-white/10 pb-1">
-            <h3 className="font-display text-xs tracking-[0.25em] text-cyan-300/80">YOUR BUILD</h3>
-            <span className="text-[10px] text-slate-500">{Object.keys(st.owned).length} picked</span>
+            <h3 className="font-display text-xs tracking-[0.25em] text-cyan-300/80">{t(lang, 'yourBuild')}</h3>
+            <span className="text-[10px] text-slate-500">{t(lang, 'picked', { n: Object.keys(st.owned).length })}</span>
           </div>
           <div className="mt-2.5">
-            <UpgradeList owned={st.owned} />
+            <UpgradeList lang={lang} owned={st.owned} />
           </div>
         </div>
 
         <div className="mt-5 space-y-2">
-          <button onClick={onResume} className="w-full rounded-xl border border-cyan-300/50 bg-cyan-400/20 py-3 font-display font-bold tracking-widest text-cyan-100 active:scale-[0.98]">▶ RESUME</button>
+          <button onClick={onResume} className="w-full rounded-xl border border-cyan-300/50 bg-cyan-400/20 py-3 font-display font-bold tracking-widest text-cyan-100 active:scale-[0.98]">{t(lang, 'resume')}</button>
           <div className="grid grid-cols-2 gap-2">
-            <button onClick={onRestart} className="w-full rounded-xl border border-white/15 bg-white/5 py-2.5 text-sm font-bold tracking-wider text-slate-200 active:scale-[0.98]">⟲ RESTART</button>
-            <button onClick={onQuit} className="w-full rounded-xl border border-white/10 py-2.5 text-sm font-semibold tracking-wider text-slate-400 active:scale-[0.98]">⌂ MENU</button>
+            <button onClick={onRestart} className="w-full rounded-xl border border-white/15 bg-white/5 py-2.5 text-sm font-bold tracking-wider text-slate-200 active:scale-[0.98]">{t(lang, 'restart')}</button>
+            <button onClick={onQuit} className="w-full rounded-xl border border-white/10 py-2.5 text-sm font-semibold tracking-wider text-slate-400 active:scale-[0.98]">{t(lang, 'menu')}</button>
           </div>
         </div>
       </div>
@@ -375,8 +409,8 @@ export function PauseScreen({ st, onResume, onRestart, onQuit }: { st: PublicSta
   );
 }
 
-export function GameOverScreen({ st, scores, onRestart, onQuit, highlight }: {
-  st: PublicState; scores: ScoreRow[]; onRestart: () => void; onQuit: () => void; highlight: number;
+export function GameOverScreen({ lang, st, scores, onRestart, onQuit, highlight }: {
+  lang: Lang; st: PublicState; scores: ScoreRow[]; onRestart: () => void; onQuit: () => void; highlight: number;
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -391,48 +425,48 @@ export function GameOverScreen({ st, scores, onRestart, onQuit, highlight }: {
     <div className="absolute inset-0 flex items-center justify-center overflow-hidden bg-[#0a0410]/82 px-3 py-4 backdrop-blur-[3px]">
       <div className="glass scroll-thin anim-in max-h-full w-full max-w-md overflow-y-auto rounded-3xl border border-rose-500/30 p-6 shadow-[0_0_80px_rgba(255,45,85,0.15)]">
         <div className="text-center">
-          <div className="font-display text-[10px] tracking-[0.45em] text-rose-300/70">RUN TERMINATED</div>
-          <h2 className="font-display anim-slam mt-1 text-3xl font-black text-rose-400 sm:text-4xl">SHATTERED</h2>
+          <div className="font-display text-[10px] tracking-[0.45em] text-rose-300/70">{t(lang, 'runTerminated')}</div>
+          <h2 className="font-display anim-slam mt-1 text-3xl font-black text-rose-400 sm:text-4xl">{t(lang, 'shattered')}</h2>
           <div className="mt-4 font-display text-5xl font-black tnum text-white">{st.score.toLocaleString()}</div>
-          <div className="text-[10px] tracking-[0.3em] text-slate-500">FINAL SCORE</div>
+          <div className="text-[10px] tracking-[0.3em] text-slate-500">{t(lang, 'finalScore')}</div>
+          {isRecord && (
+            <div className="mt-2 inline-block rounded-full border border-amber-400/50 bg-amber-400/15 px-3 py-1 font-display text-[10px] tracking-[0.25em] text-amber-300">
+              {t(lang, 'newBest')}
+            </div>
+          )}
           {st.coinsEarned > 0 && (
             <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-amber-400/10 px-3 py-1">
               <span className="text-sm">🪙</span>
-              <span className="tnum font-display text-sm font-bold text-amber-300">+{st.coinsEarned.toLocaleString()} coins earned</span>
-            </div>
-          )}
-          {isRecord && (
-            <div className="mt-2 inline-block rounded-full border border-amber-400/50 bg-amber-400/15 px-3 py-1 font-display text-[10px] tracking-[0.25em] text-amber-300">
-              ★ NEW PERSONAL BEST
+              <span className="tnum font-display text-sm font-bold text-amber-300">{t(lang, 'coinsEarned', { n: st.coinsEarned.toLocaleString() })}</span>
             </div>
           )}
         </div>
         <div className="mt-5 grid grid-cols-2 gap-2">
-          <Row label="LEVEL" value={st.level} />
-          <Row label="KILLS" value={st.kills} />
-          <Row label="WAVE" value={st.wave} />
-          <Row label="TIME" value={`${Math.floor(st.time / 60)}:${String(Math.floor(st.time % 60)).padStart(2, '0')}`} />
+          <Row label={t(lang, 'level')} value={st.level} />
+          <Row label={t(lang, 'kills')} value={st.kills} />
+          <Row label={t(lang, 'wave')} value={st.wave} />
+          <Row label={t(lang, 'time')} value={`${Math.floor(st.time / 60)}:${String(Math.floor(st.time % 60)).padStart(2, '0')}`} />
         </div>
-        <div className="mt-3 flex items-center justify-center gap-2 text-xs">
-          <span className="text-slate-400">FELL AS</span>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-2 text-xs">
+          <span className="text-slate-400">{t(lang, 'fellAs')}</span>
           <ShapeGlyph id={st.shapeId} size={18} />
-          <span className="font-bold" style={{ color: SHAPES[st.shapeId].color }}>{SHAPES[st.shapeId].name}</span>
-          <span className="text-slate-500">· {st.weapons.map((w) => WEAPONS[w].name).join(' + ')}</span>
+          <span className="font-bold" style={{ color: SHAPES[st.shapeId].color }}>{shapeName(lang, st.shapeId, SHAPES[st.shapeId].name)}</span>
+          <span className="text-slate-500">· {st.weapons.map((w) => weaponName(lang, w, WEAPONS[w].name)).join(' + ')}</span>
         </div>
         <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-3">
-          <h3 className="font-display text-[10px] tracking-[0.25em] text-cyan-300/80">FINAL BUILD</h3>
+          <h3 className="font-display text-[10px] tracking-[0.25em] text-cyan-300/80">{t(lang, 'finalBuild')}</h3>
           <div className="mt-2">
-            <UpgradeList owned={st.owned} maxRows={14} />
+            <UpgradeList lang={lang} owned={st.owned} maxRows={14} />
           </div>
         </div>
         <div className="mt-4">
-          <HighScores scores={scores} highlight={highlight} />
+          <HighScores lang={lang} scores={scores} highlight={highlight} />
         </div>
         <div className="mt-4 space-y-2">
           <button onClick={onRestart} className="w-full rounded-xl border border-cyan-300/50 bg-gradient-to-b from-cyan-400/25 to-cyan-600/10 py-3.5 font-display text-lg font-black tracking-widest text-cyan-100 active:scale-[0.98]">
-            ⟲ RETRY <span className="text-[10px] font-semibold tracking-normal text-cyan-300/60">[SPACE]</span>
+            {t(lang, 'retry')} <span className="text-[10px] font-semibold tracking-normal text-cyan-300/60">{t(lang, 'spaceKey')}</span>
           </button>
-          <button onClick={onQuit} className="w-full rounded-xl border border-white/10 py-2 text-xs font-semibold tracking-wider text-slate-400 active:scale-[0.98]">⌂ MAIN MENU</button>
+          <button onClick={onQuit} className="w-full rounded-xl border border-white/10 py-2 text-xs font-semibold tracking-wider text-slate-400 active:scale-[0.98]">{t(lang, 'mainMenu')}</button>
         </div>
       </div>
     </div>
