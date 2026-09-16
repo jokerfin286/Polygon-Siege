@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
-import { SHAPES, WEAPONS, SHAPE_ORDER, ENEMIES, TOTAL_TIERS } from '../game/defs';
+import { SHAPES, WEAPONS, SHAPE_ORDER, ENEMIES, TOTAL_TIERS, UPGRADES, type UpgDef } from '../game/defs';
+
+type OwnedEntry = { def: UpgDef; lv: number };
 import type { PublicState } from '../game/engine';
 import type { ScoreRow } from '../game/storage';
 
@@ -132,6 +134,10 @@ export function StartScreen({ best, scores, coins, onPlay, onShop }: { best: num
                       <div className="text-[9.5px] leading-tight text-slate-500">
                         {e.atk === 'melee' ? 'charges' : e.atk === 'laser' ? 'lasers' : e.atk === 'bullets' ? 'bullets' : e.atk === 'radial' ? 'bullet ring' : e.atk === 'slam' ? 'shockwave' : e.atk === 'spawn' ? 'spawns' : 'melee'}
                       </div>
+                      <div className="flex items-center gap-0.5 text-[9.5px] font-bold leading-tight text-emerald-400">
+                        <span className="inline-block h-1.5 w-1.5 rotate-45 bg-emerald-400" />
+                        {e.xp} XP
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -252,6 +258,68 @@ export function LevelUpScreen({ st, onPick, onReroll }: { st: PublicState; onPic
 
 /* ------------------------------------------------------- */
 
+const UPG_BY_ID = new Map(UPGRADES.map((u) => [u.id, u]));
+
+const KIND_ORDER: { kind: string; label: string; color: string }[] = [
+  { kind: 'stat', label: 'UPGRADES', color: 'text-slate-200' },
+  { kind: 'weapon', label: 'WEAPONS', color: 'text-cyan-300' },
+  { kind: 'shape', label: 'SHAPE CORES', color: 'text-violet-300' },
+  { kind: 'helper', label: 'HELPERS', color: 'text-emerald-300' },
+  { kind: 'special', label: 'SPECIALS', color: 'text-amber-300' },
+];
+
+export function UpgradeList({ owned, maxRows }: { owned: Record<string, number>; maxRows?: number }) {
+  const entries: OwnedEntry[] = Object.entries(owned)
+    .map(([id, lv]) => ({ def: UPG_BY_ID.get(id) as UpgDef, lv }))
+    .filter((e) => e.def && e.lv > 0)
+    .sort((a, b) => (b.def.rarity - a.def.rarity) || a.def.name.localeCompare(b.def.name));
+
+  if (entries.length === 0) {
+    return <p className="py-3 text-center text-xs text-slate-500">No upgrades yet — level up to pick some.</p>;
+  }
+
+  let shown = entries;
+  if (maxRows && entries.length > maxRows) shown = entries.slice(0, maxRows);
+
+  return (
+    <div className="space-y-2.5">
+      {KIND_ORDER.map(({ kind, label, color }) => {
+        const group = shown.filter((e) => e.def.kind === kind);
+        if (group.length === 0) return null;
+        return (
+          <div key={kind}>
+            <div className={`font-display text-[9.5px] tracking-[0.22em] ${color}`}>{label}</div>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {group.map(({ def, lv }) => (
+                <div
+                  key={def.id}
+                  title={def.desc}
+                  className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1"
+                >
+                  {def.kind === 'shape' && def.shape
+                    ? <ShapeGlyph id={def.shape} size={15} />
+                    : def.weapon
+                      ? <span style={{ color: WEAPONS[def.weapon].color }} className="text-[13px] leading-none">{WEAPONS[def.weapon].icon}</span>
+                      : <span className="text-[12px] leading-none">{def.icon}</span>}
+                  <span className="text-[11.5px] font-bold leading-none text-slate-100">{def.name}</span>
+                  {def.max > 1 && (
+                    <span className="rounded bg-white/10 px-1 font-mono text-[9.5px] leading-tight text-slate-300">
+                      {lv}/{def.max}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {entries.length > shown.length && (
+        <div className="text-center text-[10px] text-slate-500">+{entries.length - shown.length} more…</div>
+      )}
+    </div>
+  );
+}
+
 function Row({ label, value, color }: { label: string; value: string | number; color?: string }) {
   return (
     <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
@@ -262,33 +330,45 @@ function Row({ label, value, color }: { label: string; value: string | number; c
 }
 
 export function PauseScreen({ st, onResume, onRestart, onQuit }: { st: PublicState; onResume: () => void; onRestart: () => void; onQuit: () => void }) {
-  const owned = Object.keys(st.owned).length;
+  const totalTiers = Object.values(st.owned).reduce((a, b) => a + b, 0);
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-[#04070f]/80 px-4 backdrop-blur-[3px]">
-      <div className="anim-in glass w-full max-w-sm rounded-3xl border border-cyan-400/25 p-6 text-center">
-        <h2 className="font-display text-3xl font-black tracking-widest text-cyan-100">PAUSED</h2>
-        <div className="mt-4 grid grid-cols-2 gap-2">
+    <div className="absolute inset-0 flex items-center justify-center overflow-hidden bg-[#04070f]/85 px-3 py-4 backdrop-blur-[3px]">
+      <div className="anim-in glass scroll-thin max-h-full w-full max-w-md overflow-y-auto rounded-3xl border border-cyan-400/25 p-5">
+        <div className="flex items-baseline justify-between">
+          <h2 className="font-display text-2xl font-black tracking-widest text-cyan-100">PAUSED</h2>
+          <span className="font-mono text-[10px] tracking-widest text-slate-500">ESC TO RESUME</span>
+        </div>
+
+        <div className="mt-3 grid grid-cols-4 gap-2">
           <Row label="SCORE" value={st.score.toLocaleString()} />
           <Row label="LEVEL" value={st.level} />
           <Row label="KILLS" value={st.kills} />
-          <Row label="UPGRADES" value={owned} />
+          <Row label="TIERS" value={totalTiers} />
         </div>
-        <div className="mt-3 flex items-center justify-center gap-2 text-xs">
-          <span className="text-slate-400">SHAPE</span>
+
+        <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
+          <span className="text-[9.5px] tracking-[0.18em] text-slate-500">SHAPE</span>
           <ShapeGlyph id={st.shapeId} size={18} />
-          <span className="font-bold" style={{ color: SHAPES[st.shapeId].color }}>{SHAPES[st.shapeId].name}</span>
+          <span className="font-display text-sm font-bold" style={{ color: SHAPES[st.shapeId].color }}>{SHAPES[st.shapeId].name}</span>
+          <span className="ml-auto text-[10px] text-slate-500">HP {Math.ceil(st.hp)}/{Math.round(st.maxHp)}</span>
         </div>
-        <div className="mt-2 flex flex-wrap justify-center gap-1.5">
-          {st.weapons.map((w, i) => (
-            <span key={w + i} className="rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-[11px]" style={{ color: WEAPONS[w].color }}>
-              {WEAPONS[w].icon} {WEAPONS[w].name}
-            </span>
-          ))}
+
+        <div className="mt-4">
+          <div className="flex items-baseline justify-between border-b border-white/10 pb-1">
+            <h3 className="font-display text-xs tracking-[0.25em] text-cyan-300/80">YOUR BUILD</h3>
+            <span className="text-[10px] text-slate-500">{Object.keys(st.owned).length} picked</span>
+          </div>
+          <div className="mt-2.5">
+            <UpgradeList owned={st.owned} />
+          </div>
         </div>
+
         <div className="mt-5 space-y-2">
           <button onClick={onResume} className="w-full rounded-xl border border-cyan-300/50 bg-cyan-400/20 py-3 font-display font-bold tracking-widest text-cyan-100 active:scale-[0.98]">▶ RESUME</button>
-          <button onClick={onRestart} className="w-full rounded-xl border border-white/15 bg-white/5 py-2.5 text-sm font-bold tracking-wider text-slate-200 active:scale-[0.98]">⟲ RESTART</button>
-          <button onClick={onQuit} className="w-full rounded-xl border border-white/10 py-2 text-xs font-semibold tracking-wider text-slate-400 active:scale-[0.98]">⌂ MAIN MENU</button>
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={onRestart} className="w-full rounded-xl border border-white/15 bg-white/5 py-2.5 text-sm font-bold tracking-wider text-slate-200 active:scale-[0.98]">⟲ RESTART</button>
+            <button onClick={onQuit} className="w-full rounded-xl border border-white/10 py-2.5 text-sm font-semibold tracking-wider text-slate-400 active:scale-[0.98]">⌂ MENU</button>
+          </div>
         </div>
       </div>
     </div>
@@ -338,6 +418,12 @@ export function GameOverScreen({ st, scores, onRestart, onQuit, highlight }: {
           <ShapeGlyph id={st.shapeId} size={18} />
           <span className="font-bold" style={{ color: SHAPES[st.shapeId].color }}>{SHAPES[st.shapeId].name}</span>
           <span className="text-slate-500">· {st.weapons.map((w) => WEAPONS[w].name).join(' + ')}</span>
+        </div>
+        <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-3">
+          <h3 className="font-display text-[10px] tracking-[0.25em] text-cyan-300/80">FINAL BUILD</h3>
+          <div className="mt-2">
+            <UpgradeList owned={st.owned} maxRows={14} />
+          </div>
         </div>
         <div className="mt-4">
           <HighScores scores={scores} highlight={highlight} />

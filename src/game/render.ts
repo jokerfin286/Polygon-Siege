@@ -153,18 +153,40 @@ function drawPickups(g: Game, ctx: CanvasRenderingContext2D) {
     const p = g.pickups[i];
     if (!p.active) continue;
     const pulse = 0.7 + 0.3 * Math.sin(t * 9 + i);
-    const c = p.heal ? '#7dfcd6' : '#8ef7ff';
+    // green XP orbs (diamond) vs green heal orbs (cross)
+    const c = p.heal ? '#8affc0' : '#5ef07a';
+    const big = !p.heal && p.v >= 30;
+    const R = (p.heal ? 11 : big ? 12 : 9) * pulse;
     ctx.globalAlpha = p.life < 3 ? 0.3 + 0.7 * Math.abs(Math.sin(p.life * 8)) : 1;
-    ctx.fillStyle = hexA(c, 0.22 * pulse);
+    ctx.fillStyle = hexA(c, 0.2 * pulse);
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 9 * pulse, 0, 6.2832);
+    ctx.arc(p.x, p.y, R, 0, 6.2832);
     ctx.fill();
     ctx.fillStyle = c;
-    ctx.beginPath();
-    const r = p.heal ? 5.5 : 4;
-    ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x + r, p.y); ctx.lineTo(p.x, p.y + r); ctx.lineTo(p.x - r, p.y);
-    ctx.closePath();
-    ctx.fill();
+    if (p.heal) {
+      const w = 2.6, l = 7.5;
+      ctx.beginPath();
+      ctx.rect(p.x - w / 2, p.y - l, w, l * 2);
+      ctx.rect(p.x - l, p.y - w / 2, l * 2, w);
+      ctx.fill();
+      ctx.globalAlpha *= 0.5;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2.2, 0, 6.2832);
+      ctx.fill();
+    } else {
+      const r = big ? 6.5 : 4.6;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x + r, p.y); ctx.lineTo(p.x, p.y + r); ctx.lineTo(p.x - r, p.y);
+      ctx.closePath();
+      ctx.fill();
+      if (big) {
+        ctx.globalAlpha *= 0.55;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      }
+    }
   }
   ctx.globalAlpha = 1;
 }

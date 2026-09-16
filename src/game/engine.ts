@@ -908,6 +908,9 @@ export class Game {
     this.fx.burst(x, y, 16, color, { spd: r * 3.4, size: 3.4, life: 0.4, drag: 0.84 });
     this.fx.addShake(4);
     sfx.explode();
+    // Track recursion depth: an explosion may damage a foe whose own on-death
+    // blast triggers another explosion. Depth is capped in damageEnemy.
+    this._dmgDepth++;
     for (const e of this.enemies) {
       if (!e.active) continue;
       const dx = e.x - x, dy = e.y - y;
@@ -917,6 +920,7 @@ export class Game {
         this.damageEnemy(e, dmg, false, Math.cos(a) * 200, Math.sin(a) * 200);
       }
     }
+    this._dmgDepth--;
   }
 
   /* ------------------------------------------------ enemies */
@@ -1116,6 +1120,9 @@ export class Game {
   }
 
   private _chainSet = new Set<number>();
+  /** Guards against runaway recursion: explode -> damage -> explode -> ... */
+  private _dmgDepth = 0;
+  private static readonly MAX_CASCADE = 4;
 
   private nearestNotIn(x: number, y: number, max: number, set: Set<number>): Enemy | null {
     let best: Enemy | null = null;
@@ -1144,8 +1151,11 @@ export class Game {
     e.vx += kx; e.vy += ky;
     if (st.leech > 0) this.hp = Math.min(this.maxHp, this.hp + d * st.leech);
     if (st.freeze > 0 && Math.random() < st.freeze) e.frozen = Math.max(e.frozen, 0.9);
-    if (st.explode > 0 && Math.random() < 0.15 * st.explode) this.explode(e.x, e.y, 46 * st.aoe, d * 0.6, '#ffb347');
-    if (st.chainhit > 0) {
+    // Secondary effects are capped by cascade depth so chained explosions can
+    // never recurse infinitely (which previously froze / crashed the game).
+    const canCascade = this._dmgDepth < Game.MAX_CASCADE;
+    if (canCascade && st.explode > 0 && Math.random() < 0.15 * st.explode) this.explode(e.x, e.y, 46 * st.aoe, d * 0.6, '#ffb347');
+    if (canCascade && st.chainhit > 0) {
       // arcing "lightning" that jumps enemy-to-enemy, never back to a hit foe
       const maxJumps = Math.min(6, 1 + Math.floor(st.chainhit));
       if (chainDepth === 0) this._chainSet.clear();
@@ -1199,11 +1209,23 @@ export class Game {
     }
     if (gain >= 60) this.fx.text(e.x, e.y - e.r - 10, '+' + Math.round(gain), '#7dfcd6', 14);
 
-    // xp
-    const gems = e.def.boss ? 12 : e.xp > 6 ? 3 : 1;
-    const per = (e.xp * st.xpMul) / gems;
-    for (let i = 0; i < gems; i++) this.dropPickup(e.x, e.y, per, false);
-    if (e.def.boss) for (let i = 0; i < 3; i++) this.dropPickup(e.x + rnd(-30, 30), e.y + rnd(-30, 30), 0, true);
+    // Loot: green XP + heal orbs drop only sometimes, never from every foe.
+    if (e.def.boss) {
+      // bosses always shower loot
+      const shards = 10;
+      const per = (e.xp * st.xpMul) / shards;
+      for (let i = 0; i < shards; i++) {
+        const a = (i / shards) * Math.PI * 2;
+        this.dropPickup(e.x + Math.cos(a) * 22, e.y + Math.sin(a) * 22, per, false);
+      }
+      for (let i = 0; i < 3; i++) this.dropPickup(e.x + rnd(-34, 34), e.y + rnd(-34, 34), 0, true);
+    } else {
+      // XP orb: ~38% of kills, carries the enemy's full XP value
+      if (Math.random() < 0.38) this.dropPickup(e.x, e.y, e.xp * st.xpMul, false);
+      // Heal orb: rare, slightly more likely from bigger shapes
+      const healChance = 0.038 + Math.min(0.05, e.r * 0.0016);
+      if (Math.random() < healChance) this.dropPickup(e.x, e.y, 0, true);
+    }
 
     if (st.regenkill > 0) this.hp = Math.min(this.maxHp, this.hp + st.regenkill);
     if (st.deathbomb > 0) this.explode(e.x, e.y, 60 * st.deathbomb * st.aoe, e.maxHp * 0.18 + 8, '#ff9a3c');
@@ -1220,7 +1242,7 @@ export class Game {
     for (let i = 0; i < this.pickups.length; i++) {
       const p = this.pickups[i];
       if (p.active) continue;
-      p.active = true; p.x = x; p.y = y; p.v = v; p.heal = heal; p.life = 22;
+      p.active = true; p.x = x; p.y = y; p.v = v; p.heal = heal; p.life = 17;
       const a = Math.random() * 6.28;
       p.vx = Math.cos(a) * rnd(30, 110); p.vy = Math.sin(a) * rnd(30, 110);
       return;
@@ -1253,8 +1275,12 @@ export class Game {
           this.fx.ring(this.px, this.py, 10, 50, 0.3, 3, '#7dfcd6');
         } else {
           this.gainXP(p.v);
+          if (p.v >= 30) {
+            this.fx.text(this.px, this.py - 30, '+' + Math.round(p.v) + ' XP', '#5ef07a', 14);
+            this.fx.ring(this.px, this.py, 8, 44, 0.26, 3, '#5ef07a');
+          }
         }
-        this.fx.burst(p.x, p.y, 2, p.heal ? '#7dfcd6' : '#9ef7ff', { spd: 90, size: 2, life: 0.2 });
+        this.fx.burst(p.x, p.y, 3, p.heal ? '#8affc0' : '#5ef07a', { spd: 110, size: 2.4, life: 0.24 });
         sfx.pickup();
       }
     }
@@ -1266,7 +1292,7 @@ export class Game {
     while (this.xp >= this.xpNeed) {
       this.xp -= this.xpNeed;
       this.level++;
-      this.xpNeed = Math.floor(6 + this.level * 3.5 + Math.pow(this.level, 1.45));
+      this.xpNeed = Math.floor(8 + this.level * 4.5 + Math.pow(this.level, 1.6));
       this.levelUp();
     }
   }

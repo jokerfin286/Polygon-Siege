@@ -85,14 +85,14 @@ export interface EnemyDef {
 }
 
 export const ENEMIES: Record<string, EnemyDef> = {
-  ecircle:   { id: 'ecircle',   name: 'Dot',        sides: 0, hp: 9,   speed: 86,  dmg: 8,  r: 12, xp: 1, score: 10,  atk: 'melee',  atkCd: 0.8, color: '#ff5a5a', spawnAfter: 0,    weight: 40 },
-  etriangle: { id: 'etriangle', name: 'Wedge',      sides: 3, hp: 17,  speed: 70,  dmg: 11, r: 14, xp: 2, score: 22,  atk: 'laser',  atkCd: 2.4, color: '#ff7a45', spawnAfter: 22,   weight: 26 },
-  esquare:   { id: 'esquare',   name: 'Block',      sides: 4, hp: 34,  speed: 62,  dmg: 15, r: 16, xp: 3, score: 38,  atk: 'bullets',atkCd: 2.0, color: '#ff4d6d', spawnAfter: 48,   weight: 22 },
-  epentagon: { id: 'epentagon', name: 'Brute',      sides: 5, hp: 78,  speed: 70,  dmg: 22, r: 19, xp: 5, score: 75,  atk: 'melee',  atkCd: 0.9, color: '#e0347a', spawnAfter: 78,   weight: 18 },
-  ehexagon:  { id: 'ehexagon',  name: 'Hive',       sides: 6, hp: 120, speed: 48,  dmg: 24, r: 22, xp: 8, score: 120, atk: 'spawn',  atkCd: 3.4, color: '#c026a3', spawnAfter: 105,  weight: 13 },
-  eheptagon: { id: 'eheptagon', name: 'Spinner',    sides: 7, hp: 165, speed: 54,  dmg: 26, r: 23, xp: 10,score: 170, atk: 'radial', atkCd: 2.6, color: '#a21caf', spawnAfter: 132,  weight: 11 },
-  eoctagon:  { id: 'eoctagon',  name: 'Colossus',   sides: 8, hp: 380, speed: 27,  dmg: 46, r: 30, xp: 18,score: 340, atk: 'slam',   atkCd: 2.8, color: '#7e22ce', spawnAfter: 160,  weight: 8 },
-  edecagon:  { id: 'edecagon',  name: 'TYRANT',     sides: 10,hp: 2600,speed: 34,  dmg: 55, r: 46, xp: 90,score: 2200,atk: 'radial', atkCd: 1.5, color: '#ff2d55', boss: true, spawnAfter: 190, weight: 0 },
+  ecircle:   { id: 'ecircle',   name: 'Dot',        sides: 0, hp: 9,   speed: 86,  dmg: 8,  r: 12, xp: 3, score: 10,  atk: 'melee',  atkCd: 0.8, color: '#ff5a5a', spawnAfter: 0,    weight: 40 },
+  etriangle: { id: 'etriangle', name: 'Wedge',      sides: 3, hp: 17,  speed: 70,  dmg: 11, r: 14, xp: 9, score: 22,  atk: 'laser',  atkCd: 2.4, color: '#ff7a45', spawnAfter: 22,   weight: 26 },
+  esquare:   { id: 'esquare',   name: 'Block',      sides: 4, hp: 34,  speed: 62,  dmg: 15, r: 16, xp: 20, score: 38,  atk: 'bullets',atkCd: 2.0, color: '#ff4d6d', spawnAfter: 48,   weight: 22 },
+  epentagon: { id: 'epentagon', name: 'Brute',      sides: 5, hp: 78,  speed: 70,  dmg: 22, r: 19, xp: 38, score: 75,  atk: 'melee',  atkCd: 0.9, color: '#e0347a', spawnAfter: 78,   weight: 18 },
+  ehexagon:  { id: 'ehexagon',  name: 'Hive',       sides: 6, hp: 120, speed: 48,  dmg: 24, r: 22, xp: 66, score: 120, atk: 'spawn',  atkCd: 3.4, color: '#c026a3', spawnAfter: 105,  weight: 13 },
+  eheptagon: { id: 'eheptagon', name: 'Spinner',    sides: 7, hp: 165, speed: 54,  dmg: 26, r: 23, xp: 110,score: 170, atk: 'radial', atkCd: 2.6, color: '#a21caf', spawnAfter: 132,  weight: 11 },
+  eoctagon:  { id: 'eoctagon',  name: 'Colossus',   sides: 8, hp: 380, speed: 27,  dmg: 46, r: 30, xp: 200,score: 340, atk: 'slam',   atkCd: 2.8, color: '#7e22ce', spawnAfter: 160,  weight: 8 },
+  edecagon:  { id: 'edecagon',  name: 'TYRANT',     sides: 10,hp: 2600,speed: 34,  dmg: 55, r: 46, xp: 900,score: 2200,atk: 'radial', atkCd: 1.5, color: '#ff2d55', boss: true, spawnAfter: 190, weight: 0 },
 };
 
 /* ---------------- Upgrade pool (180+ tiers) ---------------- */
