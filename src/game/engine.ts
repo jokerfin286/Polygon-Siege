@@ -88,15 +88,58 @@ export interface ProjSnap {
 
 export interface Snapshot {
   t: number;
-  elapsed: number; wave: number; score: number;
-  phase: Phase; countdown: number;
-  chooser: string; chooserName: string;
-  banner: string; bannerT: number;
+  elapsed: number;
+  wave: number;
+  score: number;
+  phase: Phase;
+  countdown: number;
+  chooser: string;
+  chooserName: string;
+  choices?: Choice[];
+  banner: string;
+  bannerT: number;
   me: { x: number; y: number; hp: number; maxHp: number; level: number; alive: boolean };
   peers: Array<Omit<Peer, 'tx' | 'ty' | 'lastSeen' | 'fireCd' | 'respawnT'>>;
-  enemies: Array<{ x: number; y: number; r: number; s: number; hp: number; maxHp: number; rot: number; col: string; boss: boolean; frozen: number; burn: number; poison: number }>;
+  enemies: Array<{
+    id: number;
+    x: number;
+    y: number;
+    r: number;
+    s: number;
+    hp: number;
+    maxHp: number;
+    rot: number;
+    col: string;
+    boss: boolean;
+    frozen: number;
+    burn: number;
+    poison: number;
+  }>;
+  hazards: Array<{ x: number; y: number; r: number; delay: number; windup: number; color: string }>;
+  ebullets?: Array<{ x: number; y: number; vx: number; vy: number; r: number; color: string; kind: number }>;
   shots: ProjSnap[];
-  gems: Array<{ x: number; y: number; heal: boolean }>;
+  gems: Array<{ x: number; y: number; v: number; heal: boolean }>;
+}
+
+export interface GuestSyncData {
+  id: string;
+  name: string;
+  color: string;
+  shape: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  aimA: number;
+  hp: number;
+  maxHp: number;
+  alive: boolean;
+  level: number;
+  xp: number;
+  xpNeed: number;
+  score: number;
+  kills: number;
+  weapons: WeaponId[];
 }
 
 export interface PublicState {
@@ -111,6 +154,7 @@ export interface PublicState {
   shapeId: string;
   weapons: WeaponId[];
   choices: Choice[];
+  partnerChoices?: Choice[];
   rerolls: number;
   wave: number;
   combo: number;
@@ -233,7 +277,14 @@ export class Game {
   onSnapshot: ((snap: Snapshot) => void) | null = null;
   /** Set by a guest so the shell can ask the host to apply an upgrade. */
   onPickRequest: ((key: string) => void) | null = null;
+  onGuestSync: ((sync: GuestSyncData) => void) | null = null;
+  onDamageEnemyNet: ((enemyId: number, dmg: number, crit: boolean, kx: number, ky: number) => void) | null = null;
+  onCollectPickupNet: ((x: number, y: number, heal: boolean, v: number) => void) | null = null;
+  onPeerLevelUpRequest: ((choices: Choice[]) => void) | null = null;
+  onPeerLevelUpDone: ((key: string) => void) | null = null;
+  partnerChoices: Choice[] = [];
   private snapT = 0;
+  private guestSyncT = 0;
   private peerReviveT = 0;
 
   // background
@@ -249,7 +300,7 @@ export class Game {
     });
     for (let i = 0; i < 320; i++) this.ebullets.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, r: 5, dmg: 1, life: 0, color: '#f87171', kind: 0, rot: 0 });
     for (let i = 0; i < 130; i++) this.enemies.push(this.blankEnemy());
-    for (let i = 0; i < 260; i++) this.pickups.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, v: 1, life: 0, heal: false });
+    for (let i = 0; i < 800; i++) this.pickups.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, v: 1, life: 0, heal: false });
     for (let i = 0; i < 26; i++) this.orbitals.push({ active: false, angle: 0, dist: 0, r: 10, dmg: 1, color: '#fff', kind: 0, spin: 0, x: 0, y: 0 });
     for (let i = 0; i < 60; i++) this.helpers.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, cd: 0, life: 0, dmg: 1, kind: 0, r: 8, rot: 0, color: '#fff' });
     for (let i = 0; i < 30; i++) this.mines.push({ active: false, x: 0, y: 0, t: 0, r: 0, dmg: 0, armed: 0 });
@@ -470,42 +521,136 @@ export class Game {
         };
       });
 
+    if (snap.choices && snap.choices.length > 0) {
+      this.partnerChoices = snap.choices;
+    }
+
     // world entities
     for (let i = 0; i < this.enemies.length; i++) {
       const e = this.enemies[i];
       const s = snap.enemies[i];
       if (!s) { e.active = false; continue; }
       e.active = true;
-      e.x = s.x; e.y = s.y; e.r = s.r; e.sides = s.s;
+      e.id = s.id;
+      if (Math.hypot(e.x - s.x, e.y - s.y) > 120) {
+        e.x = s.x; e.y = s.y;
+      } else {
+        e.x += (s.x - e.x) * 0.45;
+        e.y += (s.y - e.y) * 0.45;
+      }
+      e.r = s.r; e.sides = s.s;
       e.hp = s.hp; e.maxHp = s.maxHp; e.rot = s.rot;
       e.frozen = s.frozen; e.burn = s.burn; e.poison = s.poison;
       if (!e.def || e.def.color !== s.col) {
-        const match = Object.values(ENEMIES).find((d) => d.color === s.col && d.boss === s.boss);
+        const match = Object.values(ENEMIES).find((d) => d.color === s.col && Boolean(d.boss) === s.boss);
         if (match) e.def = match;
       }
     }
     for (let i = snap.enemies.length; i < this.enemies.length; i++) this.enemies[i].active = false;
 
-    for (let i = 0; i < this.projs.length; i++) {
-      const p = this.projs[i];
-      const s = snap.shots[i];
-      if (!s) { p.active = false; continue; }
-      p.active = true;
-      p.x = s.x; p.y = s.y; p.vx = s.vx; p.vy = s.vy;
-      p.r = s.r; p.color = s.c;
-      p.kind = (['disc', 'bullet', 'orb', 'ring', 'shell', 'missile'] as const)[s.k] || 'bullet';
+    // hazards sync
+    if (snap.hazards) {
+      for (let i = 0; i < this.hazards.length; i++) {
+        const h = this.hazards[i];
+        const s = snap.hazards[i];
+        if (!s) { h.active = false; continue; }
+        h.active = true;
+        h.x = s.x; h.y = s.y; h.r = s.r;
+        h.delay = s.delay; h.windup = s.windup; h.color = s.color;
+      }
+      for (let i = snap.hazards.length; i < this.hazards.length; i++) this.hazards[i].active = false;
     }
-    for (let i = snap.shots.length; i < this.projs.length; i++) this.projs[i].active = false;
 
+    // pickups sync
     for (let i = 0; i < this.pickups.length; i++) {
       const p = this.pickups[i];
       const s = snap.gems[i];
       if (!s) { p.active = false; continue; }
-      p.active = true; p.x = s.x; p.y = s.y; p.heal = s.heal;
+      p.active = true; p.x = s.x; p.y = s.y; p.v = s.v; p.heal = s.heal;
+      p.life = s.heal ? 18 : Infinity;
     }
     for (let i = snap.gems.length; i < this.pickups.length; i++) this.pickups[i].active = false;
 
     this.centerCamera();
+  }
+
+  buildGuestSync(): GuestSyncData {
+    return {
+      id: this.selfId,
+      name: this.selfName,
+      color: this.selfColor,
+      shape: this.shapeId,
+      x: Math.round(this.px),
+      y: Math.round(this.py),
+      vx: Math.round(this.pvx),
+      vy: Math.round(this.pvy),
+      aimA: +this.aimA.toFixed(2),
+      hp: Math.round(this.hp),
+      maxHp: Math.round(this.maxHp),
+      alive: this.hp > 0,
+      level: this.level,
+      xp: Math.round(this.xp),
+      xpNeed: this.xpNeed,
+      score: Math.round(this.score),
+      kills: this.kills,
+      weapons: this.weapons.slice(),
+    };
+  }
+
+  updatePeerFromNet(data: GuestSyncData) {
+    let peer = this.peers.find((p) => p.id === data.id);
+    if (!peer) {
+      peer = {
+        id: data.id,
+        name: data.name,
+        color: data.color,
+        shape: data.shape,
+        x: data.x,
+        y: data.y,
+        tx: data.x,
+        ty: data.y,
+        vx: data.vx,
+        vy: data.vy,
+        hp: data.hp,
+        maxHp: data.maxHp,
+        alive: data.alive,
+        invuln: 0,
+        level: data.level,
+        xp: data.xp,
+        xpNeed: data.xpNeed,
+        score: data.score,
+        kills: data.kills,
+        fireCd: 0,
+        lastSeen: this.elapsed,
+        revived: 0,
+        respawnT: 0,
+      };
+      this.peers.push(peer);
+    } else {
+      peer.name = data.name;
+      peer.color = data.color;
+      peer.shape = data.shape;
+      peer.tx = data.x;
+      peer.ty = data.y;
+      peer.vx = data.vx;
+      peer.vy = data.vy;
+      peer.hp = data.hp;
+      peer.maxHp = data.maxHp;
+      peer.alive = data.alive;
+      peer.level = data.level;
+      peer.xp = data.xp;
+      peer.xpNeed = data.xpNeed;
+      peer.score = data.score;
+      peer.kills = data.kills;
+      peer.lastSeen = this.elapsed;
+    }
+  }
+
+  applyNetHit(id: number, dmg: number, crit: boolean, kx: number, ky: number) {
+    const enemy = this.enemies.find((item) => item.active && item.id === id);
+    if (enemy) {
+      this.damageEnemy(enemy, dmg, crit, kx, ky);
+    }
   }
 
   /** Host side: describe the world compactly for the wire. */
@@ -514,6 +659,7 @@ export class Game {
     for (const e of this.enemies) {
       if (!e.active) continue;
       enemies.push({
+        id: e.id,
         x: Math.round(e.x), y: Math.round(e.y), r: e.r, s: e.sides,
         hp: Math.round(e.hp), maxHp: Math.round(e.maxHp), rot: +e.rot.toFixed(2),
         col: e.def.color, boss: Boolean(e.def.boss),
@@ -532,7 +678,12 @@ export class Game {
     const gems: Snapshot['gems'] = [];
     for (const p of this.pickups) {
       if (!p.active) continue;
-      gems.push({ x: Math.round(p.x), y: Math.round(p.y), heal: p.heal });
+      gems.push({ x: Math.round(p.x), y: Math.round(p.y), v: Math.round(p.v), heal: p.heal });
+    }
+    const hazards: Snapshot['hazards'] = [];
+    for (const h of this.hazards) {
+      if (!h.active) continue;
+      hazards.push({ x: Math.round(h.x), y: Math.round(h.y), r: h.r, delay: +h.delay.toFixed(2), windup: +h.windup.toFixed(2), color: h.color });
     }
     return {
       t: Date.now(),
@@ -543,6 +694,7 @@ export class Game {
       countdown: +this.countdown.toFixed(1),
       chooser: this.chooserId,
       chooserName: this.chooserName,
+      choices: this.choices,
       banner: this.bannerText,
       bannerT: +this.bannerT.toFixed(2),
       me: {
@@ -555,7 +707,7 @@ export class Game {
         {
           id: this.selfId, name: this.selfName, color: this.selfColor,
           x: Math.round(this.px), y: Math.round(this.py),
-          vx: 0, vy: 0,
+          vx: Math.round(this.pvx), vy: Math.round(this.pvy),
           hp: Math.round(this.hp), maxHp: Math.round(this.maxHp),
           alive: this.hp > 0, invuln: +this.invuln.toFixed(1),
           level: this.level, xp: Math.round(this.xp), xpNeed: this.xpNeed,
@@ -565,7 +717,7 @@ export class Game {
         ...this.peers.map((p) => ({
           id: p.id, name: p.name, color: p.color,
           x: Math.round(p.x), y: Math.round(p.y),
-          vx: 0, vy: 0,
+          vx: Math.round(p.vx), vy: Math.round(p.vy),
           hp: Math.round(p.hp), maxHp: Math.round(p.maxHp),
           alive: p.alive, invuln: +p.invuln.toFixed(1),
           level: p.level, xp: Math.round(p.xp), xpNeed: p.xpNeed,
@@ -574,6 +726,7 @@ export class Game {
         })),
       ],
       enemies,
+      hazards,
       shots,
       gems,
     };
@@ -1007,19 +1160,30 @@ export class Game {
 
   /* ------------------------------------------------ loop */
 
+  pauseForPeerLevelUp(who: string, name: string, choices: Choice[]) {
+    this.phase = 'levelup';
+    this.chooserId = who;
+    this.chooserName = name;
+    this.partnerChoices = choices;
+    this.push();
+  }
+
+  resumeFromPeerLevelUp(_who: string) {
+    this.phase = 'playing';
+    this.chooserId = '';
+    this.chooserName = '';
+    this.partnerChoices = [];
+    // Team reward drop
+    for (const peer of this.peers) {
+      if (!peer.alive) continue;
+      this.dropPickup(peer.x, peer.y, this.xpNeed * 0.35, false);
+      this.dropPickup(peer.x, peer.y, 0, true);
+    }
+    this.push();
+  }
+
   frame(dtRaw: number) {
     const dt = Math.min(0.05, dtRaw);
-
-    // Guests never simulate: the host's snapshot is the single source of truth.
-    if (this.coop && this.isGuest) {
-      this.fx.update(dt);
-      if (this.bannerT > 0) this.bannerT -= dt;
-      this.updatePeers(dt);
-      this.updateCamera(dt);
-      this.stateT += dt;
-      if (this.stateT > 0.2) { this.stateT = 0; this.push(); }
-      return;
-    }
 
     if (this.phase === 'playing') {
       let ts = 1;
@@ -1033,10 +1197,15 @@ export class Game {
       this.stateT += dt;
       if (this.stateT > 0.2) { this.stateT = 0; this.push(); }
 
-      // host streams the world to partners ~12 times a second
+      // Host streams snapshots to partners at 20Hz
       if (this.coop && !this.isGuest && this.onSnapshot) {
         this.snapT += dt;
-        if (this.snapT >= 0.08) { this.snapT = 0; this.onSnapshot(this.buildSnapshot()); }
+        if (this.snapT >= 0.05) { this.snapT = 0; this.onSnapshot(this.buildSnapshot()); }
+      }
+      // Guest streams player state to host at 20Hz
+      if (this.coop && this.isGuest && this.onGuestSync) {
+        this.guestSyncT += dt;
+        if (this.guestSyncT >= 0.05) { this.guestSyncT = 0; this.onGuestSync(this.buildGuestSync()); }
       }
     } else {
       this.fx.update(dt * 0.35);
@@ -1068,28 +1237,46 @@ export class Game {
     this.elapsed += dt;
     if (this.coop) this.updatePeers(dt);
 
-    const newWave = Math.floor(this.elapsed / 30) + 1;
-    if (newWave !== this.wave) {
-      this.wave = newWave;
-      this.banner(tr(this.lang, 'bnr_wave', { n: this.wave }), 1.3);
-      sfx.buy();
+    if (!this.isGuest) {
+      const newWave = Math.floor(this.elapsed / 30) + 1;
+      if (newWave !== this.wave) {
+        this.wave = newWave;
+        this.banner(tr(this.lang, 'bnr_wave', { n: this.wave }), 1.3);
+        sfx.buy();
+      }
     }
     if (this.bannerT > 0) this.bannerT -= dt;
 
+    // BOTH host and guest run player movement and weapon targeting locally!
     this.updatePlayer(dt);
-    this.spawnDirector(dt);
-    this.updateEnemies(dt);
-    if (this.phase !== 'playing') return;
+
+    if (!this.isGuest) {
+      this.spawnDirector(dt);
+      this.updateEnemies(dt);
+      if (this.phase !== 'playing') return;
+      this.updateMines(dt);
+    } else if (this.invuln <= 0 && this.hp > 0) {
+      for (const e of this.enemies) {
+        if (!e.active) continue;
+        const cr = e.r + this.pr - 3;
+        if ((this.px - e.x) ** 2 + (this.py - e.y) ** 2 < cr * cr) {
+          this.hurtPlayer(e.dmg, e.x, e.y);
+          break;
+        }
+      }
+    }
+
     this.updateHazards(dt);
     if (this.phase !== 'playing') return;
-    this.updateProjs(dt);
     this.updateEBullets(dt);
     if (this.phase !== 'playing') return;
+
+    // Both host and guest simulate their own local projectiles, orbitals, helpers, pickups
+    this.updateProjs(dt);
     this.updatePickups(dt);
     if (this.phase !== 'playing') { this.updateCamera(dt); return; }
     this.updateOrbitals(dt);
     this.updateHelpers(dt);
-    this.updateMines(dt);
     this.updateWeapons(dt);
     this.updateCamera(dt);
 

@@ -3,7 +3,7 @@ import { Game, type PublicState, setBestCache, getBestCache } from './game/engin
 import { render } from './game/render';
 import { sfx } from './game/sfx';
 import { loadScores, loadMuted, saveMuted, loadBest, type ScoreRow } from './game/storage';
-import { loadMeta, saveMeta, buildStartConfig, type Meta } from './game/meta';
+import { loadMeta, saveMeta, buildStartConfig, getColor, type Meta } from './game/meta';
 import { StartScreen, LevelUpScreen, PauseScreen, GameOverScreen, DashButton } from './ui/Screens';
 import { ShopModal } from './ui/Shop';
 import { FieldGuide } from './ui/FieldGuide';
@@ -98,46 +98,57 @@ export default function App() {
     setLobbyOpen(false);
   }, [stopNet]);
 
-  /** Wire the per-run channel used for snapshots, movement and picks. */
+  /** Wire the per-run channel used for snapshots, movement, shooting and level-ups. */
   const openRunChannel = useCallback((code: string, asHost: boolean) => {
     runBus.current?.close();
     const bus = new Bus(runTopic(code));
     runBus.current = bus;
 
+    const g = gameRef.current;
+
     if (asHost) {
       bus.on((msg) => {
-        const g = gameRef.current;
-        if (!g) return;
-        if (msg.type === 'input') {
-          const peer = g.peers.find((p) => p.id === msg.who);
-          if (peer && typeof msg.x === 'number' && typeof msg.y === 'number') {
-            peer.tx = msg.x;
-            peer.ty = msg.y;
-            peer.lastSeen = g.elapsed;
-          }
-        } else if (msg.type === 'pick' && typeof msg.key === 'string') {
-          g.pick(msg.key);
+        const game = gameRef.current;
+        if (!game) return;
+        if (msg.type === 'playerSync') {
+          game.updatePeerFromNet(msg as never);
+        } else if (msg.type === 'enemyHit') {
+          game.applyNetHit(Number(msg.id), Number(msg.dmg), Boolean(msg.crit), Number(msg.kx), Number(msg.ky));
+        } else if (msg.type === 'collectPickup') {
+          const p = game.pickups.find((item) => item.active && Math.hypot(item.x - Number(msg.x), item.y - Number(msg.y)) < 40);
+          if (p) p.active = false;
+        } else if (msg.type === 'levelUpRequest') {
+          game.pauseForPeerLevelUp(String(msg.who), String(msg.name), (msg.choices as never) || []);
+          bus.send('pauseForLevelUp', { who: msg.who, name: msg.name, choices: msg.choices });
+        } else if (msg.type === 'levelUpDone') {
+          game.resumeFromPeerLevelUp(String(msg.who));
+          bus.send('resumeFromLevelUp', { who: msg.who, key: msg.key });
         }
       });
-      const g = gameRef.current;
+
       if (g) {
         g.onSnapshot = (snap) => bus.send('snap', { snap });
       }
     } else {
       bus.on((msg) => {
-        const g = gameRef.current;
-        if (!g || msg.type !== 'snap') return;
-        g.applySnapshot(msg.snap as never);
+        const game = gameRef.current;
+        if (!game) return;
+        if (msg.type === 'snap') {
+          game.applySnapshot(msg.snap as never);
+        } else if (msg.type === 'pauseForLevelUp') {
+          game.pauseForPeerLevelUp(String(msg.who), String(msg.name), (msg.choices as never) || []);
+        } else if (msg.type === 'resumeFromLevelUp') {
+          game.resumeFromPeerLevelUp(String(msg.who));
+        }
       });
-      inputTimer.current = window.setInterval(() => {
-        const g = gameRef.current;
-        if (!g || !runBus.current) return;
-        runBus.current.send('input', {
-          who: selfNetId.current,
-          x: Math.round(g.px),
-          y: Math.round(g.py),
-        });
-      }, 110);
+
+      if (g) {
+        g.onGuestSync = (sync) => bus.send('playerSync', sync as never);
+        g.onDamageEnemyNet = (id, dmg, crit, kx, ky) => bus.send('enemyHit', { id, dmg, crit, kx, ky });
+        g.onCollectPickupNet = (x, y, heal, v) => bus.send('collectPickup', { x, y, heal, v });
+        g.onPeerLevelUpRequest = (choices) => bus.send('levelUpRequest', { who: selfNetId.current, name: nicknameRef.current, choices });
+        g.onPeerLevelUpDone = (key) => bus.send('levelUpDone', { who: selfNetId.current, key });
+      }
     }
   }, []);
 
@@ -330,12 +341,25 @@ export default function App() {
       const next = peersRef.current.map((p) => (p.id === bus.id ? { ...p, ready: nextReady } : p));
       publishPeers(next);
       bus.send('roster', { code: codeRef.current, peers: next });
+      maybeAutoStart();
     } else {
       publishPeers(peersRef.current.map((p) => (p.id === bus.id ? { ...p, ready: nextReady } : p)));
       bus.send('ready', { code: codeRef.current, ready: nextReady });
     }
     sfx.select();
-  }, [publishPeers]);
+  }, [maybeAutoStart, publishPeers]);
+
+  /* Auto-join if opened with invite link ?room=CODE */
+  useEffect(() => {
+    try {
+      const room = new URLSearchParams(window.location.search).get('room');
+      if (room && room.trim().length >= 3) {
+        const clean = room.trim().toUpperCase().slice(0, 6);
+        setLobbyOpen(true);
+        joinLobby(clean);
+      }
+    } catch {}
+  }, [joinLobby]);
 
   const setNick = useCallback((value: string) => {
     const clean = value.replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 14);
@@ -620,7 +644,20 @@ export default function App() {
       {st.phase === 'playing' && <DashButton onPress={dash} ringRef={dashRing} fillRef={dashFill} />}
 
       {st.phase === 'menu' && !shopOpen && !guideOpen && !lobbyOpen && (
-        <StartScreen lang={lang} best={getBestCache()} scores={scores} coins={meta.coins} onPlay={play} onShop={openShop} onLang={changeLang} onGuide={openGuide} onMultiplayer={openLobby} />
+        <StartScreen
+          lang={lang}
+          best={getBestCache()}
+          scores={scores}
+          coins={meta.coins}
+          nickname={nickname}
+          playerShape={st.shapeId || 'circle'}
+          onPlay={play}
+          onShop={openShop}
+          onLang={changeLang}
+          onGuide={openGuide}
+          onMultiplayer={openLobby}
+          onNickname={setNick}
+        />
       )}
       {lobbyOpen && (
         <LobbyScreen
@@ -633,6 +670,9 @@ export default function App() {
           maxPlayers={4}
           error={lobbyError}
           busy={lobbyBusy}
+          playerShape={st.shapeId || 'circle'}
+          playerColor={getColor(meta)}
+          countdown={st.countdown}
           onNickname={setNick}
           onCreate={createLobby}
           onConnect={joinLobby}
@@ -646,7 +686,11 @@ export default function App() {
         <ShopModal lang={lang} meta={meta} onChange={updateMeta} onClose={closeShop} onLang={changeLang} />
       )}
       {st.phase === 'levelup' && st.coop && st.chooserId && st.chooserId !== st.selfId && (
-        <PartnerChoosingOverlay lang={lang} name={st.chooserName || '—'} />
+        <PartnerChoosingOverlay
+          lang={lang}
+          name={st.chooserName || '—'}
+          choices={st.partnerChoices}
+        />
       )}
       {st.phase === 'levelup' && !(st.coop && st.chooserId && st.chooserId !== st.selfId) && (
         <LevelUpScreen lang={lang} st={st} onPick={pick} onReroll={reroll} />
