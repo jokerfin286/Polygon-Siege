@@ -73,7 +73,6 @@ export function render(g: Game, tNow: number) {
   drawPeers(g, ctx, tNow);
   drawPlayer(g, ctx, tNow);
   drawProjs(g, ctx);
-  drawCoopLink(g, ctx);
   drawBeams(g, ctx);
   drawParticles(g, ctx);
   drawRings(g, ctx);
@@ -982,16 +981,6 @@ function drawPeers(g: Game, ctx: CanvasRenderingContext2D, t: number) {
     ctx.fillStyle = peer.alive ? (peer.hp / peer.maxHp > 0.35 ? col : '#ff6b6b') : 'rgba(255,255,255,0.2)';
     ctx.fillRect(bx, by, bw * Math.max(0, Math.min(1, peer.hp / peer.maxHp)), bh);
 
-    // their shots, so you can see what your partner is hitting
-    if (peer.shots && peer.shots.length) {
-      for (const s of peer.shots) {
-        ctx.globalAlpha = 0.22;
-        ctx.fillStyle = s.c;
-        ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 2.1, 0, 6.2832); ctx.fill();
-        ctx.globalAlpha = 0.95;
-        ctx.beginPath(); ctx.arc(s.x, s.y, Math.max(1.6, s.r * 0.8), 0, 6.2832); ctx.fill();
-      }
-    }
     if (!peer.alive) {
       ctx.globalAlpha = 0.85;
       ctx.font = `800 11px ${FONT}`;
@@ -1087,27 +1076,6 @@ function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
     ctx.strokeStyle = '#7dd3fc';
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(g.px, g.py, r + 15, 0, 6.2832); ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
-}
-
-/** Dotted tether between partners — keeps your friend on your radar. */
-export function drawCoopLink(g: Game, ctx: CanvasRenderingContext2D) {
-  if (!g.coop || !g.peers.length) return;
-  for (const peer of g.peers) {
-    if (!peer.alive) continue;
-    const dx = peer.x - g.px, dy = peer.y - g.py;
-    const d = Math.hypot(dx, dy);
-    if (d < 150) continue;
-    ctx.globalAlpha = 0.14;
-    ctx.strokeStyle = peer.color;
-    ctx.lineWidth = 1.5 / g.viewScale;
-    ctx.setLineDash([7 / g.viewScale, 12 / g.viewScale]);
-    ctx.beginPath();
-    ctx.moveTo(g.px + dx * 0.14, g.py + dy * 0.14);
-    ctx.lineTo(g.px + dx * 0.82, g.py + dy * 0.82);
-    ctx.stroke();
-    ctx.setLineDash([]);
     ctx.globalAlpha = 1;
   }
 }

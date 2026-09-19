@@ -3,19 +3,19 @@ import { Game, type PublicState, setBestCache, getBestCache } from './game/engin
 import { render } from './game/render';
 import { sfx } from './game/sfx';
 import { loadScores, loadMuted, saveMuted, loadBest, type ScoreRow } from './game/storage';
-import { loadMeta, saveMeta, buildStartConfig, type Meta } from './game/meta';
+import { loadMeta, saveMeta, buildStartConfig, getColor, type Meta } from './game/meta';
 import { StartScreen, LevelUpScreen, PauseScreen, GameOverScreen, DashButton } from './ui/Screens';
 import { ShopModal } from './ui/Shop';
 import { FieldGuide } from './ui/FieldGuide';
-import { LobbyScreen, PartnerPicker } from './ui/Lobby';
-import { Session, makeCode, PEER_COLORS, MAX_PLAYERS, type RosterEntry } from './net/net';
+import { LobbyScreen, PartnerChoosingOverlay, type LobbyStep } from './ui/Lobby';
+import { Bus, LOBBY_TOPIC, runTopic, makeCode, PEER_COLORS, type PeerInfo } from './net/net';
 import { loadLang, saveLang, t, type Lang } from './i18n';
 
 const INITIAL: PublicState = {
   phase: 'menu', score: 0, best: 0, level: 1, kills: 0, time: 0, hp: 100, maxHp: 100,
-  shapeId: 'circle', weapons: ['disc'], choices: [], rerolls: 0, wave: 1, combo: 0, owned: {}, paused: false, coinsEarned: 0,
-  coop: false, isHost: true, netKind: 'solo', picker: null, partnerScore: 0,
-  selfId: 'local', countdown: 0, chooserId: '', chooserName: '', xp: 0, xpNeed: 8, peers: [],
+  shapeId: 'circle', weapons: ['disc'], choices: [], partnerChoices: [], rerolls: 0, wave: 1, combo: 0, owned: {}, paused: false, coinsEarned: 0,
+  coop: false, isGuest: false, selfId: 'local', countdown: 0,
+  chooserId: '', chooserName: '', xp: 0, xpNeed: 8, peers: [],
 };
 
 const NICK_KEY = 'polygon-siege-nick-v1';
@@ -52,154 +52,304 @@ export default function App() {
   /* ---------------- cooperative multiplayer ---------------- */
   const [nickname, setNickname] = useState<string>(loadNick);
   const [lobbyOpen, setLobbyOpen] = useState(false);
-  const [lobbyStep, setLobbyStep] = useState<'entry' | 'inside'>('entry');
-  const [code, setCode] = useState('');
-  const [roster, setRoster] = useState<RosterEntry[]>([]);
+  const [lobbyStep, setLobbyStep] = useState<LobbyStep>('entry');
+  const [lobbyCode, setLobbyCode] = useState('');
+  const [lobbyPeers, setLobbyPeers] = useState<PeerInfo[]>([]);
   const [lobbyError, setLobbyError] = useState('');
-  const [connecting, setConnecting] = useState(false);
-  const [transport, setTransport] = useState<'net' | 'local'>('net');
-  const [ping, setPing] = useState(0);
-  const pingRef = useRef(0);
+  const [lobbyBusy, setLobbyBusy] = useState(false);
 
-  const sessRef = useRef<Session | null>(null);
-  const rosterRef = useRef<RosterEntry[]>([]);
+  const selfNetId = useRef('');
+  const lobbyBus = useRef<Bus | null>(null);
+  const runBus = useRef<Bus | null>(null);
+  const hostFlag = useRef(false);
   const nicknameRef = useRef(nickname);
   nicknameRef.current = nickname;
-  const startedRef = useRef(false);
-  const pendingStart = useRef(false);
+  const codeRef = useRef('');
+  const peersRef = useRef<PeerInfo[]>([]);
+  const advertiseTimer = useRef<number | null>(null);
+  const inputTimer = useRef<number | null>(null);
 
-  const applyRoster = useCallback((list: RosterEntry[]) => {
-    rosterRef.current = list;
-    setRoster(list);
+  const publishPeers = useCallback((next: PeerInfo[]) => {
+    peersRef.current = next;
+    setLobbyPeers(next);
   }, []);
 
-  const detachNet = useCallback(() => {
-    const g = gameRef.current;
-    if (g) { g.onNet = null; if (g.coop) g.endCoop(); }
-  }, []);
+  const stopNet = useCallback(() => {
+    if (advertiseTimer.current) { window.clearInterval(advertiseTimer.current); advertiseTimer.current = null; }
+    if (inputTimer.current) { window.clearInterval(inputTimer.current); inputTimer.current = null; }
+    runBus.current?.close();
+    lobbyBus.current?.close();
+    runBus.current = null;
+    lobbyBus.current = null;
+    hostFlag.current = false;
+    codeRef.current = '';
+    publishPeers([]);
+  }, [publishPeers]);
 
-  const leaveSession = useCallback(() => {
-    try { sessRef.current?.close(); } catch { /* ignore */ }
-    sessRef.current = null;
-    startedRef.current = false;
-    pendingStart.current = false;
-    applyRoster([]);
-    detachNet();
-    setLobbyOpen(false);
-    setLobbyStep('entry');
-    setCode('');
-    setLobbyError('');
-    setConnecting(false);
-  }, [applyRoster, detachNet]);
-
-  /** Both sides enter the match; only the host keeps world authority. */
-  const beginMatch = useCallback((isHost: boolean, selfId: string) => {
-    const g = gameRef.current;
-    const sess = sessRef.current;
-    if (!g || !sess) { pendingStart.current = true; return; }
-    const me = rosterRef.current.find((r) => r.id === selfId);
-    g.attachNet(sess.kind, (type, payload) => {
-      try { sess.send(type, payload); } catch { /* transport gone */ }
-    });
-    g.beginCoop({
-      selfId: selfId || sess.selfId,
-      selfName: (me?.name || nicknameRef.current || 'PLAYER').slice(0, 14),
-      selfColor: me?.color || PEER_COLORS[isHost ? 0 : 1],
-      isHost,
-    });
-    if (isHost) {
-      g.syncPeers(rosterRef.current
-        .filter((r) => !r.host)
-        .map((r) => ({ id: r.id, name: r.name, color: r.color })));
-      g.startCountdown(3);
+  const leaveLobby = useCallback(() => {
+    if (lobbyBus.current && codeRef.current) {
+      lobbyBus.current.send('bye', { code: codeRef.current, id: selfNetId.current });
     }
+    gameRef.current?.endCoop();
+    stopNet();
+    setLobbyCode('');
+    setLobbyStep('entry');
+    setLobbyError('');
+    setLobbyOpen(false);
+  }, [stopNet]);
+
+  /**
+   * Wire the per-run channel. The model is strictly host-authoritative:
+   *  - HOST: receives each guest's raw input + action requests, simulates the
+   *    whole world, and streams 30Hz snapshots to everyone.
+   *  - GUEST: streams its input to the host and renders the snapshots.
+   */
+  const openRunChannel = useCallback((code: string, asHost: boolean) => {
+    runBus.current?.close();
+    const bus = new Bus(runTopic(code));
+    runBus.current = bus;
+
+    const g = gameRef.current;
+
+    if (asHost) {
+      bus.on((msg) => {
+        const game = gameRef.current;
+        if (!game) return;
+        if (msg.type === 'input') {
+          game.applyGuestInput(msg as never);
+        } else if (msg.type === 'action') {
+          const who = String(msg.who);
+          switch (String(msg.action)) {
+            case 'pick': game.peerPick(who, String(msg.key)); break;
+            case 'reroll': game.peerReroll(who); break;
+            case 'pause': game.netPause(true); break;
+            case 'resume': game.netPause(false); break;
+            case 'dash': { const p = game.peers.find((x) => x.id === who); if (p) p.inDash = true; break; }
+          }
+        }
+      });
+      if (g) g.onSnapshot = (snap) => bus.send('snap', { snap });
+    } else {
+      bus.on((msg) => {
+        const game = gameRef.current;
+        if (!game || msg.type !== 'snap') return;
+        game.applySnapshot(msg.snap as never);
+      });
+      if (g) {
+        g.onGuestInput = (input) => bus.send('input', input as never);
+        g.onGuestAction = (action, payload) => bus.send('action', { who: selfNetId.current, action, ...payload });
+      }
+    }
+  }, []);
+
+  const startAsHost = useCallback(() => {
+    const g = gameRef.current;
+    if (!g) return;
+    g.beginCoop({
+      selfId: selfNetId.current,
+      selfName: nicknameRef.current,
+      selfColor: PEER_COLORS[0],
+      isGuest: false,
+    });
+    // beginCoop resets the peer list, so the roster is applied afterwards
+    const roster = peersRef.current.map((p) => ({ id: p.id, name: p.name, color: p.color }));
+    g.syncPeers(roster);
+    openRunChannel(codeRef.current, true);
+    lobbyBus.current?.send('start', { code: codeRef.current });
+    if (advertiseTimer.current) { window.clearInterval(advertiseTimer.current); advertiseTimer.current = null; }
     setLobbyOpen(false);
     setLobbyStep('entry');
+    g.startCountdown(3);
     sfx.resume();
     sfx.levelUp();
-  }, []);
+  }, [openRunChannel]);
 
-  /** Host: once every partner is ready the countdown starts by itself. */
-  const hostStart = useCallback(() => {
+  /** Once everyone in the lobby is ready, the 3-2-1 gate starts itself. */
+  const startedRef = useRef(false);
+  const startRef = useRef<() => void>(() => {});
+  startRef.current = () => {
     if (startedRef.current) return;
     startedRef.current = true;
-    try { sessRef.current?.startRun(); } catch { /* ignore */ }
-    beginMatch(true, sessRef.current?.selfId || '');
-    window.setTimeout(() => { startedRef.current = false; }, 1500);
-  }, [beginMatch]);
+    startAsHost();
+    window.setTimeout(() => { startedRef.current = false; }, 1200);
+  };
 
-  const watchRoster = useCallback((list: RosterEntry[]) => {
-    applyRoster(list);
-    const sess = sessRef.current;
-    if (!sess?.isHost) return;
-    const partners = list.filter((r) => !r.host);
-    if (partners.length > 0 && list.every((r) => r.ready)) hostStart();
-  }, [applyRoster, hostStart]);
-
-  const openSession = useCallback(async (role: 'host' | 'guest', value: string) => {
-    try { sessRef.current?.close(); } catch { /* ignore */ }
-    sessRef.current = null;
-    applyRoster([]);
-    setLobbyError('');
-    setConnecting(true);
-    startedRef.current = false;
-    pendingStart.current = false;
-    const nick = (nicknameRef.current || 'PLAYER').trim().slice(0, 14) || 'PLAYER';
-    try {
-      const sess = await Session.connect(role, value, nick, {
-        onRoster: watchRoster,
-        onStart: () => {
-          if (sessRef.current?.isHost) return;
-          beginMatch(false, sessRef.current?.selfId || '');
-        },
-        onEnd: () => {
-          setLobbyError('lost');
-          leaveSession();
-        },
-        onStatus: (state, message) => {
-          if (state === 'connecting') return;
-          if (state === 'live') { setConnecting(false); return; }
-          setConnecting(false);
-          if (message) setLobbyError(message);
-        },
-        onPing: (ms) => { pingRef.current = ms; setPing(ms); },
-        onData: (type, payload, from) => {
-          try { gameRef.current?.applyMessage(type, payload, from); } catch { /* ignore */ }
-        },
-      });
-      sessRef.current = sess;
-      setTransport(sess.kind);
-      setConnecting(false);
-      if (pendingStart.current) { pendingStart.current = false; beginMatch(false, sess.selfId); }
-      setLobbyStep('inside');
-    } catch (err) {
-      setConnecting(false);
-      setLobbyStep('entry');
-      setLobbyError(err instanceof Error ? err.message : 'Could not reach that lobby');
+  const maybeAutoStart = useCallback(() => {
+    const list = peersRef.current;
+    if (list.length > 1 && list.every((p) => p.ready)) {
+      window.setTimeout(() => startRef.current(), 320);
     }
-  }, [applyRoster, beginMatch, leaveSession, watchRoster]);
+  }, []);
 
   const createLobby = useCallback(() => {
-    const fresh = makeCode();
-    setCode(fresh);
-    void openSession('host', fresh);
-  }, [openSession]);
+    if (typeof BroadcastChannel === 'undefined') {
+      setLobbyError(t(lang, 'invalidCode'));
+      return;
+    }
+    stopNet();
+    setLobbyBusy(true);
+    setLobbyError('');
+    const code = makeCode();
+    const bus = new Bus(LOBBY_TOPIC);
+    lobbyBus.current = bus;
+    selfNetId.current = bus.id;
+    hostFlag.current = true;
+    codeRef.current = code;
+    setLobbyCode(code);
 
-  const joinLobby = useCallback((value: string) => {
-    const clean = value.trim().toUpperCase();
-    if (clean.length < 4) { setLobbyError('short'); return; }
-    setCode(clean);
-    void openSession('guest', clean);
-  }, [openSession]);
+    const me: PeerInfo = {
+      id: bus.id, name: nicknameRef.current || 'PLAYER',
+      ready: false, host: true, color: PEER_COLORS[0], shape: 'circle',
+    };
+    publishPeers([me]);
+
+    bus.on((msg) => {
+      if (msg.type === 'join' && msg.code === codeRef.current) {
+        const list = peersRef.current;
+        if (list.length >= 4) {
+          bus.send('full', { to: msg.from, code: codeRef.current });
+          return;
+        }
+        if (list.some((p) => p.id === msg.from)) return;
+        const peer: PeerInfo = {
+          id: String(msg.from),
+          name: String(msg.name || 'PLAYER').slice(0, 14),
+          ready: false,
+          host: false,
+          color: PEER_COLORS[list.length % PEER_COLORS.length],
+          shape: 'circle',
+        };
+        const next = [...list, peer];
+        publishPeers(next);
+        bus.send('joined', {
+          to: msg.from,
+          code: codeRef.current,
+          peers: next,
+          you: peer,
+        });
+        bus.send('roster', { code: codeRef.current, peers: next });
+      } else if (msg.type === 'ready' && msg.code === codeRef.current) {
+        const next = peersRef.current.map((p) => (p.id === msg.from ? { ...p, ready: Boolean(msg.ready) } : p));
+        publishPeers(next);
+        bus.send('roster', { code: codeRef.current, peers: next });
+        maybeAutoStart();
+      } else if (msg.type === 'bye' && msg.code === codeRef.current) {
+        const next = peersRef.current.filter((p) => p.id !== msg.from);
+        publishPeers(next);
+        bus.send('roster', { code: codeRef.current, peers: next });
+      }
+    });
+
+    advertiseTimer.current = window.setInterval(() => {
+      bus.send('advertise', {
+        code: codeRef.current,
+        hostName: nicknameRef.current,
+        count: peersRef.current.length,
+        max: 4,
+      });
+    }, 1400);
+
+    setLobbyStep('inside');
+    setLobbyBusy(false);
+  }, [lang, maybeAutoStart, publishPeers, stopNet]);
+
+  const joinLobby = useCallback((rawCode: string) => {
+    const code = rawCode.trim().toUpperCase();
+    if (code.length < 3) { setLobbyError(t(lang, 'invalidCode')); return; }
+    if (typeof BroadcastChannel === 'undefined') { setLobbyError(t(lang, 'invalidCode')); return; }
+
+    stopNet();
+    setLobbyBusy(true);
+    setLobbyError('');
+    setLobbyStep('joining');
+
+    const bus = new Bus(LOBBY_TOPIC);
+    lobbyBus.current = bus;
+    selfNetId.current = bus.id;
+    hostFlag.current = false;
+    codeRef.current = code;
+    setLobbyCode(code);
+
+    let settled = false;
+    const timeout = window.setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        setLobbyBusy(false);
+        setLobbyError(t(lang, 'invalidCode'));
+        setLobbyStep('entry');
+        stopNet();
+      }
+    }, 4500);
+
+    bus.on((msg) => {
+      if (msg.type === 'joined' && msg.to === bus.id) {
+        settled = true;
+        window.clearTimeout(timeout);
+        publishPeers(Array.isArray(msg.peers) ? (msg.peers as PeerInfo[]) : []);
+        setLobbyStep('inside');
+        setLobbyBusy(false);
+      } else if (msg.type === 'full' && msg.to === bus.id) {
+        settled = true;
+        window.clearTimeout(timeout);
+        setLobbyBusy(false);
+        setLobbyError(t(lang, 'lobbyFull'));
+        setLobbyStep('entry');
+      } else if (msg.type === 'roster' && msg.code === code) {
+        publishPeers(Array.isArray(msg.peers) ? (msg.peers as PeerInfo[]) : []);
+      } else if (msg.type === 'start' && msg.code === code) {
+        settled = true;
+        window.clearTimeout(timeout);
+        const g = gameRef.current;
+        if (!g) return;
+        g.beginCoop({
+          selfId: bus.id,
+          selfName: nicknameRef.current,
+          selfColor: PEER_COLORS[1 % PEER_COLORS.length],
+          isGuest: true,
+        });
+        openRunChannel(code, false);
+        setLobbyOpen(false);
+        setLobbyStep('entry');
+        sfx.resume();
+        sfx.levelUp();
+      } else if (msg.type === 'advertise' && msg.code === code && !settled) {
+        // host is alive — nudge the join in case the first one was missed
+        bus.send('join', { code, name: nicknameRef.current });
+      }
+    });
+
+    bus.send('join', { code, name: nicknameRef.current });
+  }, [lang, openRunChannel, publishPeers, stopNet]);
 
   const toggleReady = useCallback(() => {
-    const sess = sessRef.current;
-    if (!sess) return;
-    const me = rosterRef.current.find((r) => r.id === sess.selfId);
-    sess.setReady(!me?.ready);
-    if (sess.isHost) watchRoster(rosterRef.current);
+    const bus = lobbyBus.current;
+    if (!bus) return;
+    const me = peersRef.current.find((p) => p.id === bus.id);
+    const nextReady = !me?.ready;
+
+    if (hostFlag.current) {
+      const next = peersRef.current.map((p) => (p.id === bus.id ? { ...p, ready: nextReady } : p));
+      publishPeers(next);
+      bus.send('roster', { code: codeRef.current, peers: next });
+      maybeAutoStart();
+    } else {
+      publishPeers(peersRef.current.map((p) => (p.id === bus.id ? { ...p, ready: nextReady } : p)));
+      bus.send('ready', { code: codeRef.current, ready: nextReady });
+    }
     sfx.select();
-  }, [watchRoster]);
+  }, [maybeAutoStart, publishPeers]);
+
+  /* Auto-join if opened with invite link ?room=CODE */
+  useEffect(() => {
+    try {
+      const room = new URLSearchParams(window.location.search).get('room');
+      if (room && room.trim().length >= 3) {
+        const clean = room.trim().toUpperCase().slice(0, 6);
+        setLobbyOpen(true);
+        joinLobby(clean);
+      }
+    } catch {}
+  }, [joinLobby]);
 
   const setNick = useCallback((value: string) => {
     const clean = value.replace(/[^\p{L}\p{N} _-]/gu, '').slice(0, 14);
@@ -218,9 +368,10 @@ export default function App() {
 
   overlayRef.current = shopOpen || guideOpen || lobbyOpen;
 
-  /* clean the wire up when the app unmounts */
+  /* tear the network buses down when the app unmounts */
   useEffect(() => () => {
-    try { sessRef.current?.close(); } catch { /* ignore */ }
+    runBus.current?.close();
+    lobbyBus.current?.close();
   }, []);
 
   /* ---------------- boot: game + loop + input ---------------- */
@@ -367,14 +518,19 @@ export default function App() {
     sfx.select();
     setHighlight(-1);
     // starting from the menu is always a fresh solo run
-    leaveSession();
+    if (lobbyBus.current && codeRef.current) {
+      lobbyBus.current.send('bye', { code: codeRef.current, id: selfNetId.current });
+    }
+    stopNet();
+    setLobbyOpen(false);
+    setLobbyStep('entry');
     const g = gameRef.current;
     if (g) {
       if (g.coop) g.endCoop();
       g.applyMeta(buildStartConfig(metaRef.current));
       g.reset();
     }
-  }, [leaveSession]);
+  }, [stopNet]);
 
   const updateMeta = useCallback((m: Meta) => {
     saveMeta(m);
@@ -403,15 +559,18 @@ export default function App() {
   const quit = useCallback(() => {
     sfx.select();
     const g = gameRef.current;
-    leaveSession();
+    if (lobbyBus.current && codeRef.current) {
+      lobbyBus.current.send('bye', { code: codeRef.current, id: selfNetId.current });
+    }
     if (g) {
       if (g.coop) g.endCoop();
       g.phase = 'menu';
       g.push();
     }
+    stopNet();
     setLobbyOpen(false);
     setLobbyStep('entry');
-  }, [leaveSession]);
+  }, [stopNet]);
 
   const pick = useCallback((k: string) => { gameRef.current?.pick(k); }, []);
   const reroll = useCallback(() => { gameRef.current?.reroll(); }, []);
@@ -459,61 +618,54 @@ export default function App() {
 
       {st.phase === 'playing' && <DashButton onPress={dash} ringRef={dashRing} fillRef={dashFill} />}
 
-      {st.coop && st.peers.length > 0 && (
-        <div className="pointer-events-none absolute left-1/2 top-[72px] z-10 flex -translate-x-1/2 flex-wrap justify-center gap-2">
-          {st.peers.map((p) => (
-            <div
-              key={p.id}
-              className="flex items-center gap-2 rounded-xl border bg-black/50 px-2.5 py-1.5 backdrop-blur-sm"
-              style={{ borderColor: `${p.color}55` }}
-            >
-              <span className="h-2 w-2 rounded-full" style={{ background: p.alive ? p.color : '#64748b' }} />
-              <span className="font-display text-[11px] font-bold" style={{ color: p.color }}>{p.name}</span>
-              {ping > 0 && (
-                <span className={`tnum text-[9.5px] font-bold ${ping < 90 ? 'text-emerald-300/80' : ping < 220 ? 'text-amber-300/80' : 'text-rose-300/80'}`}>{ping}ms</span>
-              )}
-              <span className="tnum text-[10.5px] text-white/70">Lv{p.level}</span>
-              <span className="h-1.5 w-14 overflow-hidden rounded-full bg-white/15">
-                <span className="block h-full rounded-full transition-[width] duration-200"
-                  style={{ width: `${Math.max(0, Math.min(100, (p.hp / Math.max(1, p.maxHp)) * 100))}%`, background: p.color }} />
-              </span>
-              <span className="tnum text-[10.5px] text-white/55">{p.score.toLocaleString()}</span>
-              {!p.alive && <span className="text-[9.5px] font-bold tracking-wider text-rose-300">{t(lang, 'spectating')}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-
       {st.phase === 'menu' && !shopOpen && !guideOpen && !lobbyOpen && (
-        <StartScreen lang={lang} best={getBestCache()} scores={scores} coins={meta.coins} onPlay={play} onShop={openShop} onLang={changeLang} onGuide={openGuide} onMultiplayer={openLobby} />
+        <StartScreen
+          lang={lang}
+          best={getBestCache()}
+          scores={scores}
+          coins={meta.coins}
+          nickname={nickname}
+          playerShape={st.shapeId || 'circle'}
+          onPlay={play}
+          onShop={openShop}
+          onLang={changeLang}
+          onGuide={openGuide}
+          onMultiplayer={openLobby}
+          onNickname={setNick}
+        />
       )}
       {lobbyOpen && (
         <LobbyScreen
           lang={lang}
           step={lobbyStep}
           nickname={nickname}
-          code={code}
-          roster={roster}
-          selfId={sessRef.current?.selfId || ''}
-          isHost={Boolean(sessRef.current?.isHost)}
-          maxPlayers={MAX_PLAYERS}
-          transport={transport}
-          ping={ping}
-          connecting={connecting}
+          code={lobbyCode}
+          peers={lobbyPeers}
+          selfId={selfNetId.current}
+          maxPlayers={4}
           error={lobbyError}
+          busy={lobbyBusy}
+          playerShape={st.shapeId || 'circle'}
+          playerColor={getColor(meta)}
+          countdown={st.countdown}
           onNickname={setNick}
           onCreate={createLobby}
           onConnect={joinLobby}
           onReady={toggleReady}
-          onStart={hostStart}
-          onLeave={leaveSession}
+          onStart={startAsHost}
+          onLeave={leaveLobby}
+          onBack={leaveLobby}
         />
       )}
       {st.phase === 'menu' && shopOpen && (
         <ShopModal lang={lang} meta={meta} onChange={updateMeta} onClose={closeShop} onLang={changeLang} />
       )}
-      {st.phase === 'levelup' && st.coop && st.picker && st.chooserId !== st.selfId && (
-        <PartnerPicker lang={lang} picker={st.picker} />
+      {st.phase === 'levelup' && st.coop && st.chooserId && st.chooserId !== st.selfId && (
+        <PartnerChoosingOverlay
+          lang={lang}
+          name={st.chooserName || '—'}
+          choices={st.partnerChoices}
+        />
       )}
       {st.phase === 'levelup' && !(st.coop && st.chooserId && st.chooserId !== st.selfId) && (
         <LevelUpScreen lang={lang} st={st} onPick={pick} onReroll={reroll} />

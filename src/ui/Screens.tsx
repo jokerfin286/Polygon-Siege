@@ -62,10 +62,32 @@ export function LangToggle({ lang, onChange, className = '' }: { lang: Lang; onC
 
 /* ------------------------------------------------------- */
 
-export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang, onGuide, onMultiplayer }: {
-  lang: Lang; best: number; scores: ScoreRow[]; coins: number;
-  onPlay: () => void; onShop: () => void; onLang: (l: Lang) => void; onGuide: () => void;
+export function StartScreen({
+  lang,
+  best,
+  scores,
+  coins,
+  nickname,
+  playerShape,
+  onPlay,
+  onShop,
+  onLang,
+  onGuide,
+  onMultiplayer,
+  onNickname,
+}: {
+  lang: Lang;
+  best: number;
+  scores: ScoreRow[];
+  coins: number;
+  nickname: string;
+  playerShape: string;
+  onPlay: () => void;
+  onShop: () => void;
+  onLang: (l: Lang) => void;
+  onGuide: () => void;
   onMultiplayer: () => void;
+  onNickname: (name: string) => void;
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -85,10 +107,27 @@ export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang,
           </div>
           <h1 className="font-display title-shine text-4xl font-black leading-none sm:text-6xl">{t(lang, 'title1')}</h1>
           <h1 className="font-display title-shine -mt-1 text-4xl font-black leading-none sm:text-6xl">{t(lang, 'title2')}</h1>
-          <p className="mx-auto mt-3 max-w-md text-sm text-slate-300/80 sm:text-base">{t(lang, 'intro')}</p>
+          <p className="mx-auto mt-2 max-w-md text-sm text-slate-300/80 sm:text-base">{t(lang, 'intro')}</p>
         </div>
 
-        <div className="mt-5 flex flex-col items-center gap-3">
+        {/* Player nickname input right at the beginning */}
+        <div className="mx-auto my-3 flex w-full max-w-xs items-center justify-center">
+          <div className="flex w-full items-center gap-2.5 rounded-2xl border border-white/15 bg-black/45 px-3.5 py-2 shadow-inner transition focus-within:border-cyan-300">
+            <ShapeGlyph id={playerShape} size={22} />
+            <span className="font-display text-[10px] tracking-wider text-slate-400 uppercase">
+              {t(lang, 'nickname')}:
+            </span>
+            <input
+              value={nickname}
+              maxLength={14}
+              onChange={(e) => onNickname(e.target.value)}
+              placeholder={t(lang, 'yourNamePlaceholder')}
+              className="w-full min-w-0 bg-transparent font-display text-[14px] font-bold text-white outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="mt-2 flex flex-col items-center gap-3">
           <button
             onClick={onPlay}
             className="anim-pulse group relative w-full max-w-xs rounded-2xl border border-cyan-300/60 bg-gradient-to-b from-cyan-400/25 to-cyan-600/10 px-8 py-4 font-display text-xl font-black tracking-widest text-cyan-100 transition active:scale-[0.97] hover:from-cyan-300/35"
@@ -413,6 +452,21 @@ export function PauseScreen({ lang, st, onResume, onRestart, onQuit, onGuide }: 
             <UpgradeList lang={lang} owned={st.owned} shapeId={st.shapeId} />
           </div>
         </div>
+
+        {/* Co-op: show every partner's build too */}
+        {st.coop && st.peers.length > 0 && st.peers.map((peer) => (
+          <div key={peer.id} className="mt-4">
+            <div className="flex items-baseline justify-between border-b border-white/10 pb-1">
+              <h3 className="font-display text-xs tracking-[0.25em]" style={{ color: peer.color }}>
+                {peer.name} · {t(lang, 'lv')} {peer.level}
+              </h3>
+              <span className="text-[10px] text-slate-500">{t(lang, 'picked', { n: Object.keys(peer.owned || {}).length })}</span>
+            </div>
+            <div className="mt-2.5">
+              <UpgradeList lang={lang} owned={peer.owned || {}} />
+            </div>
+          </div>
+        ))}
 
         <div className="mt-5 space-y-2">
           <button onClick={onResume} className="w-full rounded-xl border border-cyan-300/50 bg-cyan-400/20 py-3 font-display font-bold tracking-widest text-cyan-100 active:scale-[0.98]">{t(lang, 'resume')}</button>
