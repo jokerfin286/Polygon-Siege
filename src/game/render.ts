@@ -70,8 +70,8 @@ export function render(g: Game, tNow: number) {
   drawEBullets(g, ctx);
   drawHelpers(g, ctx);
   drawOrbitals(g, ctx);
-  if (g.coop) drawMates(g, ctx, tNow);
-  if (!(g.coop && g.localMate && !g.localMate.alive)) drawPlayer(g, ctx, tNow);
+  drawPeers(g, ctx, tNow);
+  drawPlayer(g, ctx, tNow);
   drawProjs(g, ctx);
   drawBeams(g, ctx);
   drawParticles(g, ctx);
@@ -83,8 +83,39 @@ export function render(g: Game, tNow: number) {
   // ---- HUD & overlays (screen space, no shake) ----
   screenTransform(g, ctx, false);
   drawHUD(g, ctx, tNow);
+  drawCountdown(g, ctx);
   drawVignette(g, ctx);
   drawFlash(g, ctx);
+}
+
+/** Big centred 3-2-1 used by the lobby start gate. */
+function drawCountdown(g: Game, ctx: CanvasRenderingContext2D) {
+  if (g.countdown <= 0) return;
+  const n = Math.ceil(g.countdown);
+  const frac = g.countdown - Math.floor(g.countdown);
+  const scale = 1 + (1 - frac) * 0.35;
+  ctx.save();
+  ctx.translate(g.W / 2, g.H / 2);
+  ctx.scale(scale, scale);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.globalAlpha = 0.16;
+  ctx.fillStyle = '#38f5e0';
+  ctx.beginPath();
+  ctx.arc(0, 0, 96, 0, 6.2832);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.font = `900 128px ${FONT}`;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillText(String(n), 3, 3);
+  ctx.fillStyle = '#eaf6ff';
+  ctx.fillText(String(n), 0, 0);
+  ctx.font = `800 15px ${FONT}`;
+  ctx.fillStyle = 'rgba(160,200,240,0.85)';
+  ctx.fillText(tr(g.lang, 'getReady'), 0, 82);
+  ctx.restore();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 }
 
 const wrap = (v: number, m: number) => ((v % m) + m) % m;
@@ -900,51 +931,64 @@ function drawHelpers(g: Game, ctx: CanvasRenderingContext2D) {
   }
 }
 
-function drawMates(g: Game, ctx: CanvasRenderingContext2D, t: number) {
-  for (const m of g.mates) {
-    if (!m.active || m.local || !m.alive) continue;
-    const sh = SHAPES[m.shapeId];
-    const r = sh.size;
-    const rot = Math.atan2(m.vy, m.vx) + (Math.hypot(m.vx, m.vy) > 20 ? 0 : t * 0.7);
-    const inv = m.invuln > 0 && Math.floor(m.invuln * 20) % 2 === 0;
-    // immortality aura
-    if (m.immortalT > 0) {
-      ctx.globalAlpha = 0.25 + 0.15 * Math.sin(t * 8);
-      ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(m.x, m.y, r + 12, 0, 6.2832); ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-    ctx.globalAlpha = 0.18;
-    ctx.fillStyle = m.color;
-    ctx.beginPath(); ctx.arc(m.x, m.y, r * 2.4, 0, 6.2832); ctx.fill();
-    ctx.globalAlpha = inv ? 0.4 : 1;
-    ctx.fillStyle = hexA(m.color, 0.28);
-    ctx.strokeStyle = inv ? '#ffffff' : m.color;
-    ctx.lineWidth = 3;
-    polyPath(ctx, m.x, m.y, r, sh.sides, rot);
-    ctx.fill(); ctx.stroke();
-    ctx.fillStyle = m.color;
-    polyPath(ctx, m.x, m.y, r * 0.42, sh.sides, -rot * 1.6 + t);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    // aim tick
-    ctx.strokeStyle = hexA(m.color, 0.6); ctx.lineWidth = 2;
+/** Cooperative partners: coloured shape + nameplate + HP ring. */
+function drawPeers(g: Game, ctx: CanvasRenderingContext2D, t: number) {
+  if (!g.peers.length) return;
+  for (const peer of g.peers) {
+    const sh = SHAPES[peer.shape] || SHAPES.circle;
+    const col = peer.color;
+    const r = sh.size * 0.92;
+    const blink = peer.invuln > 0 && Math.floor(peer.invuln * 18) % 2 === 0;
+
+    // soft ground shadow ring so partners read as solid actors
+    ctx.globalAlpha = peer.alive ? 0.22 : 0.08;
+    ctx.fillStyle = col;
     ctx.beginPath();
-    ctx.moveTo(m.x + Math.cos(m.aim) * (r + 3), m.y + Math.sin(m.aim) * (r + 3));
-    ctx.lineTo(m.x + Math.cos(m.aim) * (r + 14), m.y + Math.sin(m.aim) * (r + 14));
+    ctx.arc(peer.x, peer.y, r * 1.9, 0, 6.2832);
+    ctx.fill();
+
+    ctx.globalAlpha = blink ? 0.35 : peer.alive ? 1 : 0.22;
+    ctx.lineWidth = 2.6;
+    ctx.strokeStyle = col;
+    ctx.fillStyle = hexA(col, 0.26);
+    polyPath(ctx, peer.x, peer.y, r, sh.sides, t * 0.7);
+    ctx.fill();
     ctx.stroke();
-    // name + hp bar
-    const scale = g.viewScale || 1;
-    ctx.save();
-    ctx.font = `700 ${Math.round(12 / scale)}px Rajdhani, sans-serif`;
+
+    // revival halo
+    if (peer.revived > 0) {
+      const k = peer.revived / 3;
+      ctx.globalAlpha = 0.5 * k;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(peer.x, peer.y, r + 14 + (1 - k) * 26, 0, 6.2832);
+      ctx.stroke();
+    }
+
+    // nameplate + health
+    ctx.globalAlpha = peer.alive ? 0.92 : 0.55;
     ctx.textAlign = 'center';
-    ctx.fillStyle = m.color;
-    ctx.fillText(m.name, m.x, m.y - r - 14 / scale);
-    ctx.restore();
-    const bw = r * 2.4, bx = m.x - bw / 2, by = m.y - r - 9;
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(bx, by, bw, 3.5);
-    ctx.fillStyle = m.hp / m.maxHp > 0.3 ? '#5ef07a' : '#ff5a72';
-    ctx.fillRect(bx, by, bw * Math.max(0, m.hp / m.maxHp), 3.5);
+    ctx.font = `800 12px ${FONT}`;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillText(peer.name, peer.x + 1, peer.y - r - 16);
+    ctx.fillStyle = col;
+    ctx.fillText(peer.name, peer.x, peer.y - r - 17);
+
+    const bw = 52, bh = 5, bx = peer.x - bw / 2, by = peer.y - r - 11;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+    ctx.fillStyle = peer.alive ? (peer.hp / peer.maxHp > 0.35 ? col : '#ff6b6b') : 'rgba(255,255,255,0.2)';
+    ctx.fillRect(bx, by, bw * Math.max(0, Math.min(1, peer.hp / peer.maxHp)), bh);
+
+    if (!peer.alive) {
+      ctx.globalAlpha = 0.85;
+      ctx.font = `800 11px ${FONT}`;
+      ctx.fillStyle = '#ff8fa3';
+      ctx.fillText(tr(g.lang, 'spectating'), peer.x, peer.y + r + 18);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
   }
 }
 
@@ -952,18 +996,12 @@ function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   const sh = SHAPES[g.shapeId];
   const col = g.playerColor || sh.color;
   const acc = g.playerColor || sh.accent;
-  const inv = g.invuln > 0 && Math.floor(g.invuln * 20) % 2 === 0;
+  // In co-op a dead player keeps drifting as a translucent spectator ghost.
+  const ghost = Boolean(g.coop && g.hp <= 0);
+  const inv = ghost || (g.invuln > 0 && Math.floor(g.invuln * 20) % 2 === 0);
   const vel = Math.hypot(g.pvx, g.pvy);
   const rot = Math.atan2(g.pvy, g.pvx) + (vel > 20 ? 0 : t * 0.7);
   const r = sh.size * (1 + 0.05 * Math.sin(t * 5));
-
-  // co-op immortality reward aura on the local player
-  if (g.coop && g.localMate && g.localMate.immortalT > 0) {
-    ctx.globalAlpha = 0.25 + 0.15 * Math.sin(t * 8);
-    ctx.strokeStyle = '#ffe066'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(g.px, g.py, r + 12, 0, 6.2832); ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
 
   // thrust
   if (vel > 30) {
@@ -1011,6 +1049,16 @@ function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
       ctx.lineTo(mount.x + Math.cos(mount.angle) * 9, mount.y + Math.sin(mount.angle) * 9);
       ctx.stroke();
     }
+  }
+
+  if (ghost) {
+    ctx.globalAlpha = 0.75;
+    ctx.textAlign = 'center';
+    ctx.font = `800 12px ${FONT}`;
+    ctx.fillStyle = '#ff8fa3';
+    ctx.fillText(tr(g.lang, 'spectating'), g.px, g.py + r + 22);
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
   }
 
   // shield
