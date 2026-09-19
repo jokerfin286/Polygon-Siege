@@ -6,7 +6,9 @@ export type WeaponId =
   | 'disc' | 'laser' | 'bullet' | 'orb' | 'volley'
   | 'arc' | 'shell' | 'blades' | 'nova' | 'missile' | 'rail';
 
-export type AtkKind = 'melee' | 'bullets' | 'laser' | 'homing' | 'radial' | 'slam' | 'spawn';
+export type AtkKind = 'melee' | 'bullets' | 'laser' | 'homing' | 'radial' | 'slam' | 'spawn'
+  | 'charge' | 'skirmish' | 'bulwark' | 'mend' | 'mortar'
+  | 'prismBoss' | 'siegeBoss' | 'broodBoss';
 
 export interface ShapeDef {
   id: string;
@@ -80,6 +82,7 @@ export interface EnemyDef {
   atkCd: number;
   color: string;
   boss?: boolean;
+  motif?: 'lance' | 'wings' | 'shield' | 'seeker' | 'medic' | 'mortar' | 'prism' | 'maw' | 'brood';
   spawnAfter: number; // seconds
   weight: number;
 }
@@ -93,9 +96,20 @@ export const ENEMIES: Record<string, EnemyDef> = {
   eheptagon: { id: 'eheptagon', name: 'Spinner',    sides: 7, hp: 165, speed: 54,  dmg: 26, r: 23, xp: 110,score: 170, atk: 'radial', atkCd: 2.6, color: '#a21caf', spawnAfter: 132,  weight: 11 },
   eoctagon:  { id: 'eoctagon',  name: 'Colossus',   sides: 8, hp: 380, speed: 27,  dmg: 46, r: 30, xp: 200,score: 340, atk: 'slam',   atkCd: 2.8, color: '#7e22ce', spawnAfter: 160,  weight: 8 },
   edecagon:  { id: 'edecagon',  name: 'TYRANT',     sides: 10,hp: 2600,speed: 34,  dmg: 55, r: 46, xp: 900,score: 2200,atk: 'radial', atkCd: 1.5, color: '#ff2d55', boss: true, spawnAfter: 190, weight: 0 },
+  elancer:   { id: 'elancer', name: 'Lancer', sides: 3, hp: 25, speed: 94, dmg: 16, r: 15, xp: 14, score: 34, atk: 'charge', atkCd: 3.3, color: '#ff8059', motif: 'lance', spawnAfter: 32, weight: 12 },
+  eskimmer:  { id: 'eskimmer', name: 'Skimmer', sides: 4, hp: 46, speed: 108, dmg: 16, r: 16, xp: 26, score: 54, atk: 'skirmish', atkCd: 1.9, color: '#fb557e', motif: 'wings', spawnAfter: 58, weight: 10 },
+  ebulwark:  { id: 'ebulwark', name: 'Bulwark', sides: 6, hp: 115, speed: 40, dmg: 26, r: 24, xp: 82, score: 145, atk: 'bulwark', atkCd: 2.7, color: '#ec6171', motif: 'shield', spawnAfter: 92, weight: 8 },
+  eharrier:  { id: 'eharrier', name: 'Harrier', sides: 5, hp: 84, speed: 63, dmg: 24, r: 20, xp: 52, score: 95, atk: 'homing', atkCd: 3.1, color: '#ff765f', motif: 'seeker', spawnAfter: 80, weight: 9 },
+  emender:   { id: 'emender', name: 'Mender', sides: 7, hp: 145, speed: 54, dmg: 20, r: 22, xp: 135, score: 210, atk: 'mend', atkCd: 3.5, color: '#ff8ba4', motif: 'medic', spawnAfter: 118, weight: 6 },
+  emortar:   { id: 'emortar', name: 'Mortar', sides: 8, hp: 205, speed: 32, dmg: 34, r: 26, xp: 240, score: 300, atk: 'mortar', atkCd: 3.8, color: '#f45f49', motif: 'mortar', spawnAfter: 142, weight: 7 },
+  b_prism:   { id: 'b_prism', name: 'PRISM ARCHON', sides: 3, hp: 2000, speed: 62, dmg: 34, r: 47, xp: 1000, score: 2500, atk: 'prismBoss', atkCd: 3.2, color: '#ff668d', motif: 'prism', boss: true, spawnAfter: 150, weight: 0 },
+  b_maw:     { id: 'b_maw', name: 'IRON MAW', sides: 8, hp: 3100, speed: 46, dmg: 44, r: 53, xp: 1200, score: 2900, atk: 'siegeBoss', atkCd: 3.8, color: '#ff895b', motif: 'maw', boss: true, spawnAfter: 150, weight: 0 },
+  b_brood:   { id: 'b_brood', name: 'BROODMOTHER', sides: 6, hp: 2400, speed: 40, dmg: 32, r: 49, xp: 1100, score: 2700, atk: 'broodBoss', atkCd: 4.8, color: '#ed508b', motif: 'brood', boss: true, spawnAfter: 150, weight: 0 },
 };
 
-/* ---------------- Upgrade pool (180+ tiers) ---------------- */
+export const BOSS_IDS = ['edecagon', 'b_prism', 'b_maw', 'b_brood'];
+
+/* ---------------- Upgrade pool ---------------- */
 
 export type UpgKind = 'stat' | 'weapon' | 'shape' | 'helper' | 'special';
 
@@ -112,12 +126,47 @@ export interface UpgDef {
   weapon?: WeaponId;
   shape?: string;
   req?: string;
+  forShape?: string;
+  isNew?: boolean;
 }
 
 const S = (
   id: string, name: string, stat: string, per: number, max: number,
   rarity: 0 | 1 | 2 | 3, icon: string, desc: string
 ): UpgDef => ({ id, name, kind: 'stat', stat, per, max, rarity, icon, desc });
+
+const M = (id: string, name: string, forShape: string, desc: string): UpgDef => ({
+  id, name, forShape, desc, kind: 'stat', stat: id, per: 1, max: 3, rarity: 1, icon: 'M', isNew: true,
+});
+
+export const EXPANSION_UPGRADES: UpgDef[] = [
+  M('circleGyro', 'Gyroscopic Discs', 'circle', 'Discs: +15% fire rate and +1 ricochet per rank.'),
+  M('circleFlow', 'Fluid Motion', 'circle', '+8% movement speed and +0.5 HP/sec per rank.'),
+  M('trianglePrism', 'Prismatic Optics', 'triangle', 'Beams: +20% damage and +15% width per rank.'),
+  M('triangleSlip', 'Slipstream', 'triangle', '+8% movement speed and +5% critical chance per rank.'),
+  M('squareBelt', 'Belt-Fed Battery', 'square', 'Bullets: +15% damage and +1 pierce per rank.'),
+  M('squareFortress', 'Fortress Core', 'square', '+20 max HP and +1 armor per rank.'),
+  M('pentagonSeek', 'Seeker Matrix', 'pentagon', 'Orbs and missiles: +25% speed and +20% damage per rank.'),
+  M('pentagonVenom', 'Venom Reactor', 'pentagon', 'Unlock poison; +25% poison damage per rank.'),
+  M('hexagonBurst', 'Starburst Array', 'hexagon', 'Volley: +2 bolts and +10% fire rate per rank.'),
+  M('hexagonGuard', 'Bastion Orbit', 'hexagon', '+25 max HP and +1 orbit guard per rank.'),
+  M('heptagonRelay', 'Storm Relay', 'heptagon', 'Lightning: +1 jump and +15% jump range per rank.'),
+  M('heptagonCharge', 'Live Capacitor', 'heptagon', 'Lightning: +15% damage; +1 shield capacity per rank.'),
+  M('octagonSiege', 'Siege Engineering', 'octagon', 'Shells: +20% damage and +20% blast radius per rank.'),
+  M('octagonTreads', 'Titan Treads', 'octagon', '+10% movement speed and +1 armor per rank.'),
+  { ...S('bossHunter', 'Kingslayer', 'bossHunter', 0.20, 3, 2, 'K', '+20% damage against bosses per rank.'), isNew: true },
+  { ...S('bastion', 'Reactive Plating', 'bastion', 0.08, 3, 1, 'A', 'Take 8% less damage per rank.'), isNew: true },
+  { ...S('secondSkin', 'Phase Lining', 'secondSkin', 0.10, 3, 1, 'P', '+0.10 seconds of invulnerability after a hit per rank.'), isNew: true },
+  { ...S('fieldMedicine', 'Field Medicine', 'fieldMedicine', 0.20, 3, 0, '+', 'HP pickups restore 20% more health per rank.'), isNew: true },
+  { ...S('panicPulse', 'Emergency Pulse', 'panicPulse', 1, 2, 2, 'O', 'Taking damage clears nearby bullets and repels foes. 8s cooldown; rank 2 increases radius.'), isNew: true },
+  { ...S('levelRepair', 'Recovery Matrix', 'levelRepair', 0.04, 3, 1, '+', 'Restore an extra 4% max HP on level-up per rank.'), isNew: true },
+  { ...S('combustion', 'Combustion', 'combustion', 0.25, 3, 2, 'F', '+25% direct damage against burning enemies per rank.'), req: 'fire', isNew: true },
+  { ...S('shatter', 'Brittle Ice', 'shatter', 0.25, 3, 2, 'I', '+25% direct damage against frozen enemies per rank.'), isNew: true },
+  { ...S('toxinCatalyst', 'Toxin Catalyst', 'toxinCatalyst', 0.30, 3, 2, 'V', '+30% poison damage per rank.'), isNew: true },
+  { ...S('chainReach', 'Long-Range Relay', 'chainReach', 0.25, 3, 1, 'L', '+25% lightning jump range per rank.'), isNew: true },
+  { ...S('formation', 'Squad Link', 'formation', 0.12, 3, 1, 'S', '+12% helper damage and fire rate per rank.'), kind: 'helper', isNew: true },
+  { ...S('interceptor', 'Point Defense', 'interceptor', 1, 2, 2, 'X', 'Intercept a nearby enemy shot every 2s; every 1s at rank 2.'), isNew: true },
+];
 
 export const UPGRADES: UpgDef[] = [
   // ---- core stats ----
@@ -146,8 +195,8 @@ export const UPGRADES: UpgDef[] = [
 
   // ---- perimeter multi-barrels (shape-native weapon arrays) ----
   // Each level adds +1 barrel around the shape's rim (max 5 total).
-  S('barrels', 'Rim Mounts',  'barrels', 1, 4, 2, '⬡', '+1 weapon barrel on the shape perimeter (up to 5)'),
-  S('focus',   'Focus Fire',  'focus',   0.08, 3, 1, '◎', 'Perimeter barrels converge +8% tighter'),
+  S('barrels', 'Rim Mounts',  'barrels', 1, 4, 2, '⬡', '+1 adjacent, independently aimed barrel (up to 5)'),
+  S('focus',   'Focus Fire',  'focus',   0.08, 3, 1, '◎', '+8% projectile speed and beam damage per rank'),
 
   // ---- elemental weapon infusions ----
   S('fire',    'Incendiary',  'fire',    1, 3, 2, '🔥', 'Hits ignite foes — burn DoT stacks'),
@@ -173,7 +222,7 @@ export const UPGRADES: UpgDef[] = [
   { id: 'w_rail',    name: 'Railgun',  kind: 'weapon', max: 1, rarity: 3, icon: '⇶', weapon: 'rail',    desc: 'Equip: row-erasing charged slug' },
   { id: 'wslot',     name: 'Weapon Bay', kind: 'stat', max: 3, rarity: 3, icon: '🧰', stat: 'wslot', per: 1, desc: '+1 weapon slot (carry more weapons)' },
   { id: 'wpower',    name: 'Synergy',  kind: 'stat', stat: 'wpower', per: 0.15, max: 4, rarity: 2, icon: '🔗', desc: '+15% damage per extra weapon' },
-  { id: 'aux',       name: 'Auxiliary Fire', kind: 'stat', stat: 'aux', per: 1, max: 2, rarity: 3, icon: '⟳', desc: 'Secondary weapons fire automatically too' },
+  { id: 'aux',       name: 'Auxiliary Fire', kind: 'stat', stat: 'aux', per: 1, max: 2, rarity: 2, icon: '⟳', desc: '+15% fire rate for all secondary weapons per rank' },
 
   // ---- shape cores ----
   { id: 'shape_triangle', name: 'Core: Triangle', kind: 'shape', shape: 'triangle', max: 1, rarity: 2, icon: '▲', desc: 'Become a Triangle — fast, fragile, lasers' },
@@ -235,6 +284,7 @@ export const UPGRADES: UpgDef[] = [
   S('lucky',    'Lucky Draw',    'lucky',    0.4,  3, 1, '🍀', 'Better upgrade rarities appear'),
   S('overheat', 'Overheat',      'overheat', 1,    2, 2, '♨', 'Fire rate ramps up while continuously shooting'),
   S('mark',     'Hunter Mark',   'mark',     1,    3, 2, '◎', 'First hit marks foes for +25% damage'),
+  ...EXPANSION_UPGRADES,
 ];
 
 function countTiers(): number {

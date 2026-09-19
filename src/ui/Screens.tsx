@@ -62,12 +62,14 @@ export function LangToggle({ lang, onChange, className = '' }: { lang: Lang; onC
 
 /* ------------------------------------------------------- */
 
-export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang }: {
+export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang, onGuide, onMultiplayer }: {
   lang: Lang; best: number; scores: ScoreRow[]; coins: number;
-  onPlay: () => void; onShop: () => void; onLang: (l: Lang) => void;
+  onPlay: () => void; onShop: () => void; onLang: (l: Lang) => void; onGuide: () => void;
+  onMultiplayer: () => void;
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      if (e.repeat || (e.target instanceof HTMLElement && e.target.closest('button, input, select'))) return;
       if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); onPlay(); }
     };
     window.addEventListener('keydown', h);
@@ -103,12 +105,22 @@ export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang 
             >
               {t(lang, 'armory')}
             </button>
+            <button
+              onClick={onMultiplayer}
+              className="flex items-center gap-2 rounded-2xl border border-violet-400/50 bg-violet-500/15 px-5 py-2.5 font-display text-sm font-bold tracking-widest text-violet-100 transition active:scale-95 hover:bg-violet-500/25"
+            >
+              <span className="flex h-4 w-4 items-center justify-center rounded-full border border-violet-200/70 text-[9px] leading-none">●</span>
+              {t(lang, 'multiplayer')}
+            </button>
             <div className="flex items-center gap-1.5 rounded-2xl border border-white/10 bg-black/30 px-4 py-2.5">
               <span className="text-base">🪙</span>
               <span className="tnum font-display text-sm font-bold text-amber-300">{coins.toLocaleString()}</span>
             </div>
             <LangToggle lang={lang} onChange={onLang} />
           </div>
+          <button onClick={onGuide} className="border-b border-cyan-400/30 pb-1 font-display text-[11px] tracking-widest text-cyan-200/80 transition hover:border-cyan-200 hover:text-white">
+            {t(lang, 'fieldGuide')} &gt;
+          </button>
           <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-slate-400">
             <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">WASD</kbd> / <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">↑↓←→</kbd> {t(lang, 'move')}</span>
             <span><kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-cyan-200">SPACE</kbd> {t(lang, 'dash')}</span>
@@ -144,7 +156,7 @@ export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang 
             <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
               <h3 className="font-display text-xs tracking-[0.25em] text-rose-300/80">{t(lang, 'theRedSiege')}</h3>
               <div className="mt-3 grid grid-cols-2 gap-1.5">
-                {Object.values(ENEMIES).map((e) => (
+                {Object.values(ENEMIES).slice(0, 8).map((e) => (
                   <div key={e.id} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-2 py-1.5">
                     <ShapeIcon sides={e.sides} color={e.color} size={20} />
                     <div className="min-w-0">
@@ -158,6 +170,9 @@ export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang 
                   </div>
                 ))}
               </div>
+              <button onClick={onGuide} className="mt-3 w-full border-t border-white/10 pt-3 text-left text-xs text-rose-200 hover:text-white">
+                {t(lang, 'guideEnemies')} / {t(lang, 'guideBosses')} &gt;
+              </button>
             </div>
             <HighScores lang={lang} scores={scores} />
           </div>
@@ -205,18 +220,19 @@ export function LevelUpScreen({ lang, st, onPick, onReroll }: {
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      if (e.repeat) return;
       if (e.key >= '1' && e.key <= '3') {
         const i = parseInt(e.key, 10) - 1;
         if (st.choices[i]) onPick(st.choices[i].key);
       }
-      if (e.key.toLowerCase() === 'r' && st.rerolls > 0) onReroll();
+      if ((e.code === 'KeyR' || e.key.toLowerCase() === 'r') && st.rerolls > 0) onReroll();
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [st.choices, st.rerolls, onPick, onReroll]);
 
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#04070f]/78 px-3 py-4 backdrop-blur-[3px]">
+    <div className="scroll-thin absolute inset-0 flex flex-col items-center overflow-y-auto bg-[#04070f]/90 px-3 py-4 backdrop-blur-[3px] sm:justify-center">
       <div className="anim-slam text-center">
         <div className="font-display text-[10px] tracking-[0.5em] text-cyan-300/70">{t(lang, 'levelN', { n: st.level })}</div>
         <h2 className="font-display title-shine text-3xl font-black sm:text-4xl">{t(lang, 'evolve')}</h2>
@@ -224,7 +240,7 @@ export function LevelUpScreen({ lang, st, onPick, onReroll }: {
       <div className="mt-4 grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-3" key={st.choices.map((c) => c.key).join('|')}>
         {st.choices.map((c, i) => {
           const r = RARITY[c.def.rarity];
-          const isShape = c.def.kind === 'shape';
+          const glyphShape = c.def.forShape || (c.def.kind === 'shape' ? c.def.shape : undefined);
           const w = c.def.weapon ? WEAPONS[c.def.weapon] : null;
           return (
             <button
@@ -235,8 +251,8 @@ export function LevelUpScreen({ lang, st, onPick, onReroll }: {
             >
               <div className="flex items-start justify-between">
                 <div className={`flex h-12 w-12 items-center justify-center rounded-xl border ${r.border} bg-black/40 text-2xl`}>
-                  {isShape && c.def.shape
-                    ? <ShapeGlyph id={c.def.shape} size={30} />
+                  {glyphShape
+                    ? <ShapeGlyph id={glyphShape} size={30} />
                     : w
                       ? <span style={{ color: w.color }}>{w.icon}</span>
                       : <span>{c.def.icon}</span>}
@@ -250,7 +266,7 @@ export function LevelUpScreen({ lang, st, onPick, onReroll }: {
                   </div>
                 </div>
               </div>
-              <div className="mt-2.5 font-display text-[9px] tracking-[0.22em] text-slate-400">{t(lang, 'kind_' + c.def.kind)}</div>
+              <div className="mt-2.5 font-display text-[9px] tracking-[0.16em] text-slate-400">{t(lang, c.def.forShape ? 'kind_mastery' : 'kind_' + c.def.kind)}</div>
               <h3 className="font-display text-lg font-bold leading-tight text-white">{upgName(lang, c.def.id, c.def.name)}</h3>
               <p className="mt-1 flex-1 text-[13px] leading-snug text-slate-300/90">{upgDesc(lang, c.def.id, c.def.desc)}</p>
               <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-2 text-[10px] text-slate-500">
@@ -286,6 +302,7 @@ export function LevelUpScreen({ lang, st, onPick, onReroll }: {
 const UPG_BY_ID = new Map(UPGRADES.map((u) => [u.id, u]));
 
 const KIND_ORDER: { kind: string; color: string }[] = [
+  { kind: 'mastery', color: 'text-cyan-200' },
   { kind: 'stat', color: 'text-slate-200' },
   { kind: 'weapon', color: 'text-cyan-300' },
   { kind: 'shape', color: 'text-violet-300' },
@@ -293,7 +310,7 @@ const KIND_ORDER: { kind: string; color: string }[] = [
   { kind: 'special', color: 'text-amber-300' },
 ];
 
-export function UpgradeList({ lang, owned, maxRows }: { lang: Lang; owned: Record<string, number>; maxRows?: number }) {
+export function UpgradeList({ lang, owned, maxRows, shapeId }: { lang: Lang; owned: Record<string, number>; maxRows?: number; shapeId?: string }) {
   const entries: OwnedEntry[] = Object.entries(owned)
     .map(([id, lv]) => ({ def: UPG_BY_ID.get(id) as UpgDef, lv }))
     .filter((e) => e.def && e.lv > 0)
@@ -309,7 +326,7 @@ export function UpgradeList({ lang, owned, maxRows }: { lang: Lang; owned: Recor
   return (
     <div className="space-y-2.5">
       {KIND_ORDER.map(({ kind, color }) => {
-        const group = shown.filter((e) => e.def.kind === kind);
+        const group = shown.filter((e) => kind === 'mastery' ? Boolean(e.def.forShape) : !e.def.forShape && e.def.kind === kind);
         if (group.length === 0) return null;
         return (
           <div key={kind}>
@@ -318,11 +335,11 @@ export function UpgradeList({ lang, owned, maxRows }: { lang: Lang; owned: Recor
               {group.map(({ def, lv }) => (
                 <div
                   key={def.id}
-                  title={upgDesc(lang, def.id, def.desc)}
-                  className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1"
+                  title={upgDesc(lang, def.id, def.desc) + (def.forShape && def.forShape !== shapeId ? ` (${t(lang, 'masteryInactive', { name: shapeName(lang, def.forShape, SHAPES[def.forShape].name) })})` : '')}
+                  className={`flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1 ${def.forShape && shapeId && def.forShape !== shapeId ? 'opacity-45' : ''}`}
                 >
-                  {def.kind === 'shape' && def.shape
-                    ? <ShapeGlyph id={def.shape} size={15} />
+                  {def.forShape || (def.kind === 'shape' && def.shape)
+                    ? <ShapeGlyph id={def.forShape || def.shape!} size={15} />
                     : def.weapon
                       ? <span style={{ color: WEAPONS[def.weapon].color }} className="text-[13px] leading-none">{WEAPONS[def.weapon].icon}</span>
                       : <span className="text-[12px] leading-none">{def.icon}</span>}
@@ -352,8 +369,8 @@ function Row({ label, value, color }: { label: string; value: string | number; c
   );
 }
 
-export function PauseScreen({ lang, st, onResume, onRestart, onQuit }: {
-  lang: Lang; st: PublicState; onResume: () => void; onRestart: () => void; onQuit: () => void;
+export function PauseScreen({ lang, st, onResume, onRestart, onQuit, onGuide }: {
+  lang: Lang; st: PublicState; onResume: () => void; onRestart: () => void; onQuit: () => void; onGuide: () => void;
 }) {
   const totalTiers = Object.values(st.owned).reduce((a, b) => a + b, 0);
   return (
@@ -371,7 +388,7 @@ export function PauseScreen({ lang, st, onResume, onRestart, onQuit }: {
           <Row label={t(lang, 'tiers')} value={totalTiers} />
         </div>
 
-        <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
           <span className="text-[9.5px] tracking-[0.18em] text-slate-500">{t(lang, 'shape')}</span>
           <ShapeGlyph id={st.shapeId} size={18} />
           <span className="font-display text-sm font-bold" style={{ color: SHAPES[st.shapeId].color }}>
@@ -393,12 +410,13 @@ export function PauseScreen({ lang, st, onResume, onRestart, onQuit }: {
             <span className="text-[10px] text-slate-500">{t(lang, 'picked', { n: Object.keys(st.owned).length })}</span>
           </div>
           <div className="mt-2.5">
-            <UpgradeList lang={lang} owned={st.owned} />
+            <UpgradeList lang={lang} owned={st.owned} shapeId={st.shapeId} />
           </div>
         </div>
 
         <div className="mt-5 space-y-2">
           <button onClick={onResume} className="w-full rounded-xl border border-cyan-300/50 bg-cyan-400/20 py-3 font-display font-bold tracking-widest text-cyan-100 active:scale-[0.98]">{t(lang, 'resume')}</button>
+          <button onClick={onGuide} className="w-full rounded-xl border border-white/15 py-2.5 text-xs tracking-widest text-cyan-200 hover:bg-white/5">{t(lang, 'fieldGuide')}</button>
           <div className="grid grid-cols-2 gap-2">
             <button onClick={onRestart} className="w-full rounded-xl border border-white/15 bg-white/5 py-2.5 text-sm font-bold tracking-wider text-slate-200 active:scale-[0.98]">{t(lang, 'restart')}</button>
             <button onClick={onQuit} className="w-full rounded-xl border border-white/10 py-2.5 text-sm font-semibold tracking-wider text-slate-400 active:scale-[0.98]">{t(lang, 'menu')}</button>
@@ -414,7 +432,8 @@ export function GameOverScreen({ lang, st, scores, onRestart, onQuit, highlight 
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.code === 'Space' || e.code === 'Enter' || e.key.toLowerCase() === 'r') { e.preventDefault(); onRestart(); }
+      if (e.repeat || (e.target instanceof HTMLElement && e.target.closest('button, input, select'))) return;
+      if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyR') { e.preventDefault(); onRestart(); }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
@@ -456,7 +475,7 @@ export function GameOverScreen({ lang, st, scores, onRestart, onQuit, highlight 
         <div className="mt-3 rounded-2xl border border-white/10 bg-black/25 p-3">
           <h3 className="font-display text-[10px] tracking-[0.25em] text-cyan-300/80">{t(lang, 'finalBuild')}</h3>
           <div className="mt-2">
-            <UpgradeList lang={lang} owned={st.owned} maxRows={14} />
+            <UpgradeList lang={lang} owned={st.owned} maxRows={14} shapeId={st.shapeId} />
           </div>
         </div>
         <div className="mt-4">

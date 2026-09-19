@@ -48,7 +48,7 @@ export interface Flash {
 const MAX_P = 1400;
 const MAX_R = 90;
 const MAX_F = 60;
-const MAX_B = 40;
+const MAX_B = 140;
 
 export class FX {
   parts: Particle[] = [];
@@ -140,6 +140,19 @@ export class FX {
         b.active = true; b.x1 = x1; b.y1 = y1; b.x2 = x2; b.y2 = y2; b.w = w; b.color = color; b.max = b.life = life;
         return;
       }
+    }
+  }
+
+  lightning(x1: number, y1: number, x2: number, y2: number, color: string) {
+    const dx = x2 - x1, dy = y2 - y1;
+    const length = Math.hypot(dx, dy) || 1;
+    let px = x1, py = y1;
+    for (let i = 1; i <= 4; i++) {
+      const offset = i === 4 ? 0 : (Math.random() - 0.5) * Math.min(24, length * 0.15);
+      const nx = x1 + dx * i / 4 - dy / length * offset;
+      const ny = y1 + dy * i / 4 + dx / length * offset;
+      this.beam(px, py, nx, ny, 2.3, color, 0.16);
+      px = nx; py = ny;
     }
   }
 

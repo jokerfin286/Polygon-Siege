@@ -1,5 +1,5 @@
 import { SHAPES, WEAPONS, polyPath } from './defs';
-import { t as tr, shapeName, weaponName } from '../i18n';
+import { t as tr, shapeName, weaponName, enemyName } from '../i18n';
 import type { Game } from './engine';
 
 let bgGrad: CanvasGradient | null = null;
@@ -63,12 +63,14 @@ export function render(g: Game, tNow: number) {
   ctx.globalCompositeOperation = 'lighter';
   drawPickups(g, ctx);
   drawMines(g, ctx);
+  drawHazards(g, ctx);
   drawEnemyTelegraphs(g, ctx);
   ctx.globalCompositeOperation = 'source-over';
   drawEnemies(g, ctx);
   drawEBullets(g, ctx);
   drawHelpers(g, ctx);
   drawOrbitals(g, ctx);
+  drawPeers(g, ctx, tNow);
   drawPlayer(g, ctx, tNow);
   drawProjs(g, ctx);
   drawBeams(g, ctx);
@@ -81,8 +83,39 @@ export function render(g: Game, tNow: number) {
   // ---- HUD & overlays (screen space, no shake) ----
   screenTransform(g, ctx, false);
   drawHUD(g, ctx, tNow);
+  drawCountdown(g, ctx);
   drawVignette(g, ctx);
   drawFlash(g, ctx);
+}
+
+/** Big centred 3-2-1 used by the lobby start gate. */
+function drawCountdown(g: Game, ctx: CanvasRenderingContext2D) {
+  if (g.countdown <= 0) return;
+  const n = Math.ceil(g.countdown);
+  const frac = g.countdown - Math.floor(g.countdown);
+  const scale = 1 + (1 - frac) * 0.35;
+  ctx.save();
+  ctx.translate(g.W / 2, g.H / 2);
+  ctx.scale(scale, scale);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.globalAlpha = 0.16;
+  ctx.fillStyle = '#38f5e0';
+  ctx.beginPath();
+  ctx.arc(0, 0, 96, 0, 6.2832);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.font = `900 128px ${FONT}`;
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillText(String(n), 3, 3);
+  ctx.fillStyle = '#eaf6ff';
+  ctx.fillText(String(n), 0, 0);
+  ctx.font = `800 15px ${FONT}`;
+  ctx.fillStyle = 'rgba(160,200,240,0.85)';
+  ctx.fillText(tr(g.lang, 'getReady'), 0, 82);
+  ctx.restore();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 }
 
 const wrap = (v: number, m: number) => ((v % m) + m) % m;
@@ -548,12 +581,67 @@ function drawEnemies(g: Game, ctx: CanvasRenderingContext2D) {
       ctx.globalAlpha = 1;
     }
     if (e.def.boss) {
-      ctx.globalAlpha = 0.5 + 0.3 * Math.sin(performance.now() / 180);
-      ctx.strokeStyle = '#ff2d55';
+      ctx.globalAlpha = (e.enraged ? 0.65 : 0.4) + 0.15 * Math.sin(e.age * 5);
+      ctx.strokeStyle = e.def.color;
       ctx.lineWidth = 2;
-      polyPath(ctx, e.x, e.y, e.r * 1.35, 10, -e.rot * 0.7);
+      polyPath(ctx, e.x, e.y, e.r * 1.35, e.sides, -e.rot * 0.7);
       ctx.stroke();
       ctx.globalAlpha = 1;
+    }
+    if (e.def.motif) {
+      ctx.save();
+      ctx.translate(e.x, e.y);
+      ctx.strokeStyle = e.def.color;
+      ctx.fillStyle = hexA(e.def.color, 0.24);
+      ctx.lineWidth = 2;
+      const motif = e.def.motif;
+      if (motif === 'shield') {
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(0, 0, e.r + 9, e.rot - 1.12, e.rot + 1.12); ctx.stroke();
+      } else if (motif === 'lance') {
+        ctx.rotate(e.state > 0 ? e.ax : Math.atan2(g.py - e.y, g.px - e.x));
+        for (let j = 0; j < 2; j++) {
+          const x = -e.r - 5 - j * 7;
+          ctx.beginPath(); ctx.moveTo(x - 4, -6); ctx.lineTo(x + 2, 0); ctx.lineTo(x - 4, 6); ctx.stroke();
+        }
+      } else if (motif === 'wings') {
+        ctx.rotate(e.rot);
+        for (const side of [-1, 1]) {
+          polyPath(ctx, side * (e.r + 7), 0, 6, 3, side > 0 ? 0 : Math.PI); ctx.fill(); ctx.stroke();
+        }
+      } else if (motif === 'medic') {
+        ctx.strokeStyle = '#ffd4e2'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(-7, 0); ctx.lineTo(7, 0); ctx.moveTo(0, -7); ctx.lineTo(0, 7); ctx.stroke();
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath(); ctx.arc(0, 0, e.r + 7, e.age, e.age + Math.PI * 1.5); ctx.stroke();
+      } else if (motif === 'seeker' || motif === 'mortar') {
+        ctx.rotate(e.rot);
+        const rr = e.r + 6;
+        for (let j = 0; j < 4; j++) {
+          ctx.rotate(Math.PI / 2);
+          ctx.beginPath(); ctx.moveTo(rr - 2, 0); ctx.lineTo(rr + 6, 0); ctx.stroke();
+        }
+        if (motif === 'mortar') { ctx.beginPath(); ctx.arc(0, 0, e.r * 0.58, 0, Math.PI * 2); ctx.stroke(); }
+      } else if (motif === 'prism' || motif === 'brood') {
+        const count = motif === 'prism' ? 3 : 6;
+        for (let j = 0; j < count; j++) {
+          const a = e.age * 0.7 + j * Math.PI * 2 / count;
+          const rr = e.r * 1.45;
+          polyPath(ctx, Math.cos(a) * rr, Math.sin(a) * rr, motif === 'prism' ? 7 : 5, motif === 'prism' ? 4 : 3, a);
+          ctx.fill(); ctx.stroke();
+        }
+      } else if (motif === 'maw') {
+        ctx.rotate(e.state > 0 ? e.ax : e.rot);
+        const open = e.state === 1 ? 10 : 3;
+        for (const side of [-1, 1]) {
+          ctx.beginPath();
+          ctx.moveTo(-e.r * 0.4, side * (e.r + open));
+          ctx.lineTo(e.r * 0.85, side * (e.r * 0.6 + open));
+          ctx.lineTo(e.r * 0.65, side * (e.r * 0.2 + open));
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
     }
     // elemental status rings
     if (e.burn > 0) {
@@ -596,7 +684,7 @@ function drawEnemyTelegraphs(g: Game, ctx: CanvasRenderingContext2D) {
   for (let i = 0; i < g.enemies.length; i++) {
     const e = g.enemies[i];
     if (!e.active || e.state !== 1) continue;
-    const p = 1 - e.windup / (e.atk === 'slam' ? 0.75 : 0.62);
+    const p = Math.max(0, Math.min(1, 1 - e.windup / (e.atk === 'slam' ? 0.75 : 1.15)));
     if (e.atk === 'laser') {
       const range = 900;
       ctx.globalAlpha = 0.25 + 0.45 * p;
@@ -615,9 +703,48 @@ function drawEnemyTelegraphs(g: Game, ctx: CanvasRenderingContext2D) {
       ctx.beginPath();
       ctx.arc(e.x, e.y, 175 * p, 0, 6.2832);
       ctx.stroke();
+    } else if (e.atk === 'charge' || e.atk === 'siegeBoss') {
+      ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(e.ax);
+      ctx.globalAlpha = 0.06 + p * 0.12;
+      ctx.fillStyle = e.def.color; ctx.fillRect(0, -e.r, e.ay, e.r * 2);
+      ctx.globalAlpha = 0.45 + p * 0.4;
+      ctx.strokeStyle = e.def.color; ctx.lineWidth = 2;
+      ctx.setLineDash([9, 8]); ctx.strokeRect(0, -e.r, e.ay, e.r * 2); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(e.ay - 12, -10); ctx.lineTo(e.ay, 0); ctx.lineTo(e.ay - 12, 10); ctx.stroke();
+      ctx.restore();
+    } else if (e.atk === 'prismBoss') {
+      const count = e.enraged ? 5 : 3;
+      ctx.strokeStyle = e.def.color; ctx.lineWidth = 2;
+      ctx.globalAlpha = 0.35 + p * 0.5; ctx.setLineDash([12, 7]);
+      for (let j = 0; j < count; j++) {
+        const angle = e.ax + j * Math.PI * 2 / count;
+        ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(e.x + Math.cos(angle) * 900, e.y + Math.sin(angle) * 900); ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    } else if (e.atk === 'mend') {
+      ctx.globalAlpha = 0.12 + p * 0.25;
+      ctx.strokeStyle = '#ffb0ce'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(e.x, e.y, 230 * (0.3 + p * 0.7), 0, Math.PI * 2); ctx.stroke();
     }
     ctx.globalAlpha = 1;
   }
+}
+
+function drawHazards(g: Game, ctx: CanvasRenderingContext2D) {
+  for (const h of g.hazards) {
+    if (!h.active) continue;
+    const progress = Math.max(0, Math.min(1, 1 - h.delay / h.windup));
+    ctx.fillStyle = h.color; ctx.strokeStyle = h.color;
+    ctx.globalAlpha = h.delay > 0 ? 0.06 + progress * 0.09 : h.life * 0.65;
+    ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.75; ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(h.x, h.y, Math.max(1, h.r * progress), 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(h.x - 8, h.y); ctx.lineTo(h.x + 8, h.y); ctx.moveTo(h.x, h.y - 8); ctx.lineTo(h.x, h.y + 8); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawEBullets(g: Game, ctx: CanvasRenderingContext2D) {
@@ -629,8 +756,8 @@ function drawEBullets(g: Game, ctx: CanvasRenderingContext2D) {
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 2.1, 0, 6.2832); ctx.fill();
     ctx.globalAlpha = 1;
     ctx.fillStyle = b.color;
-    if (b.kind === 1) {
-      polyPath(ctx, b.x, b.y, b.r, 3, b.rot);
+    if (b.kind === 1 || b.kind === 2) {
+      polyPath(ctx, b.x, b.y, b.r * (b.kind === 2 ? 1.4 : 1), 3, b.kind === 2 ? Math.atan2(b.vy, b.vx) : b.rot);
       ctx.fill();
     } else {
       ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 6.2832); ctx.fill();
@@ -804,11 +931,74 @@ function drawHelpers(g: Game, ctx: CanvasRenderingContext2D) {
   }
 }
 
+/** Cooperative partners: coloured shape + nameplate + HP ring. */
+function drawPeers(g: Game, ctx: CanvasRenderingContext2D, t: number) {
+  if (!g.peers.length) return;
+  for (const peer of g.peers) {
+    const sh = SHAPES[peer.shape] || SHAPES.circle;
+    const col = peer.color;
+    const r = sh.size * 0.92;
+    const blink = peer.invuln > 0 && Math.floor(peer.invuln * 18) % 2 === 0;
+
+    // soft ground shadow ring so partners read as solid actors
+    ctx.globalAlpha = peer.alive ? 0.22 : 0.08;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(peer.x, peer.y, r * 1.9, 0, 6.2832);
+    ctx.fill();
+
+    ctx.globalAlpha = blink ? 0.35 : peer.alive ? 1 : 0.22;
+    ctx.lineWidth = 2.6;
+    ctx.strokeStyle = col;
+    ctx.fillStyle = hexA(col, 0.26);
+    polyPath(ctx, peer.x, peer.y, r, sh.sides, t * 0.7);
+    ctx.fill();
+    ctx.stroke();
+
+    // revival halo
+    if (peer.revived > 0) {
+      const k = peer.revived / 3;
+      ctx.globalAlpha = 0.5 * k;
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(peer.x, peer.y, r + 14 + (1 - k) * 26, 0, 6.2832);
+      ctx.stroke();
+    }
+
+    // nameplate + health
+    ctx.globalAlpha = peer.alive ? 0.92 : 0.55;
+    ctx.textAlign = 'center';
+    ctx.font = `800 12px ${FONT}`;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillText(peer.name, peer.x + 1, peer.y - r - 16);
+    ctx.fillStyle = col;
+    ctx.fillText(peer.name, peer.x, peer.y - r - 17);
+
+    const bw = 52, bh = 5, bx = peer.x - bw / 2, by = peer.y - r - 11;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+    ctx.fillStyle = peer.alive ? (peer.hp / peer.maxHp > 0.35 ? col : '#ff6b6b') : 'rgba(255,255,255,0.2)';
+    ctx.fillRect(bx, by, bw * Math.max(0, Math.min(1, peer.hp / peer.maxHp)), bh);
+
+    if (!peer.alive) {
+      ctx.globalAlpha = 0.85;
+      ctx.font = `800 11px ${FONT}`;
+      ctx.fillStyle = '#ff8fa3';
+      ctx.fillText(tr(g.lang, 'spectating'), peer.x, peer.y + r + 18);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+  }
+}
+
 function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   const sh = SHAPES[g.shapeId];
   const col = g.playerColor || sh.color;
   const acc = g.playerColor || sh.accent;
-  const inv = g.invuln > 0 && Math.floor(g.invuln * 20) % 2 === 0;
+  // In co-op a dead player keeps drifting as a translucent spectator ghost.
+  const ghost = Boolean(g.coop && g.hp <= 0);
+  const inv = ghost || (g.invuln > 0 && Math.floor(g.invuln * 20) % 2 === 0);
   const vel = Math.hypot(g.pvx, g.pvy);
   const rot = Math.atan2(g.pvy, g.pvx) + (vel > 20 ? 0 : t * 0.7);
   const r = sh.size * (1 + 0.05 * Math.sin(t * 5));
@@ -844,31 +1034,31 @@ function drawPlayer(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // perimeter multi-barrel mounts (Rim Mounts upgrade) — glowing hardpoints on the rim
-  const barrels = 1 + (g.stats?.barrels || 0);
-  if (barrels > 1 || true) {
-    const arc = Math.PI * (0.55 - (g.stats?.focus || 0) * 0.12);
-    for (let i = 0; i < barrels; i++) {
-      const tN = barrels === 1 ? 0 : (i / (barrels - 1) - 0.5);
-      const a = g.aimA + tN * arc * 2;
-      const bx = g.px + Math.cos(a) * (r + 3);
-      const by = g.py + Math.sin(a) * (r + 3);
-      // hardpoint
-      ctx.globalAlpha = 0.9;
-      ctx.fillStyle = col;
-      ctx.beginPath(); ctx.arc(bx, by, 3.2, 0, 6.2832); ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.arc(bx, by, 3.2, 0, 6.2832); ctx.stroke();
-      // barrel tip
-      ctx.strokeStyle = hexA(col, 0.7);
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(bx, by);
-      ctx.lineTo(bx + Math.cos(a) * 9, by + Math.sin(a) * 9);
+  for (let wi = g.weapons.length - 1; wi >= 0; wi--) {
+    const weapon = WEAPONS[g.weapons[wi]];
+    if (weapon.kind === 'orbit') continue;
+    const count = wi === 0 ? 1 + (g.stats?.barrels || 0) : 1;
+    for (let i = count - 1; i >= 0; i--) {
+      const mount = g.getWeaponMount(wi, i);
+      ctx.strokeStyle = hexA(weapon.color, 0.4); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(g.px, g.py); ctx.lineTo(mount.x, mount.y); ctx.stroke();
+      ctx.fillStyle = '#091421';
+      ctx.beginPath(); ctx.arc(mount.x, mount.y, wi > 0 ? 4 : 3.2, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = weapon.color; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(mount.x, mount.y);
+      ctx.lineTo(mount.x + Math.cos(mount.angle) * 9, mount.y + Math.sin(mount.angle) * 9);
       ctx.stroke();
     }
+  }
+
+  if (ghost) {
+    ctx.globalAlpha = 0.75;
+    ctx.textAlign = 'center';
+    ctx.font = `800 12px ${FONT}`;
+    ctx.fillStyle = '#ff8fa3';
+    ctx.fillText(tr(g.lang, 'spectating'), g.px, g.py + r + 22);
     ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
   }
 
   // shield
@@ -949,6 +1139,18 @@ function drawHUD(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   const W = g.W, H = g.H;
   const pad = 14;
 
+  const boss = g.enemies.find((e) => e.active && e.def.boss);
+  if (boss) {
+    const width = Math.min(360, W - 40), left = (W - width) / 2;
+    ctx.textAlign = 'left'; ctx.font = `700 12px ${FONT}`;
+    ctx.fillStyle = boss.def.color;
+    ctx.fillText(enemyName(g.lang, boss.def.id, boss.def.name), left, 110, width * 0.72);
+    ctx.textAlign = 'right'; ctx.fillStyle = '#fbd9df';
+    ctx.fillText(tr(g.lang, 'bossPhase', { n: boss.enraged ? 2 : 1 }), left + width, 110);
+    ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(left - 3, 116, width + 6, 9);
+    ctx.fillStyle = boss.def.color; ctx.fillRect(left, 119, width * Math.max(0, boss.hp / boss.maxHp), 3);
+  }
+
   // ---- score (top centre) ----
   ctx.textAlign = 'center';
   ctx.font = `800 34px ${MONO}`;
@@ -1023,7 +1225,7 @@ function drawHUD(g: Game, ctx: CanvasRenderingContext2D, t: number) {
   const wy = H - pad - iw - 22;
   for (let i = 0; i < n; i++) {
     const w = WEAPONS[g.weapons[i]];
-    ctx.globalAlpha = i === 0 ? 1 : 0.62;
+    ctx.globalAlpha = 1;
     ctx.fillStyle = 'rgba(6,14,28,0.8)';
     roundRect(ctx, wx, wy, iw, iw, 8);
     ctx.fill();

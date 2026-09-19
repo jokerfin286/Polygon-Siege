@@ -57,13 +57,13 @@ async function main() {
       let vx = 0, vy = 0;
       if (near) {
         const dist = Math.sqrt(nd) || 1;
-        const away = dist < 230 ? -1 : dist > 420 ? 0.4 : 0;
+        const away = dist < 230 ? 1 : dist > 420 ? -0.4 : 0;
         vx = ((g.px - near.x) / dist) * away;
         vy = ((g.py - near.y) / dist) * away;
       }
       // steer to centre
-      vx += (g.W / 2 - g.px) / g.W * 0.6;
-      vy += (g.H / 2 - g.py) / g.H * 0.6;
+      vx += (g.worldW / 2 - g.px) / g.worldW * 0.6;
+      vy += (g.worldH / 2 - g.py) / g.worldH * 0.6;
       g.keys.clear();
       if (vx < -0.15) g.keys.add('a'); else if (vx > 0.15) g.keys.add('d');
       if (vy < -0.15) g.keys.add('w'); else if (vy > 0.15) g.keys.add('s');
@@ -85,13 +85,18 @@ async function main() {
         return 10 + Math.random() * 20;
       };
       const c = g.choices.slice().sort((a, b) => scoreC(b) - scoreC(a))[0];
-      g.pick(c.key);
+      if (c) g.pick(c.key);
     }
-    if (i % 600 === 0) g.togglePause();
+    if (i > 0 && i % 3600 === 0 && g.phase === 'playing') {
+      const elapsed = g.elapsed;
+      g.pause(); g.frame(dt);
+      if (g.elapsed !== elapsed) throw new Error('Simulation advanced during pause');
+      g.resume();
+    }
     let n = 0;
     for (const e of g.enemies) if (e.active) n++;
     if (n > maxEnemies) maxEnemies = n;
-    if (!Number.isFinite(g.score)) { console.error('SCORE BROKE at frame', i); break; }
+    if (!Number.isFinite(g.score)) throw new Error(`Non-finite score at frame ${i}`);
     if (g.phase === 'dead') {
       deathsLog.push({ t: +g.elapsed.toFixed(1), kills: g.kills, lvl: g.level, score: Math.floor(g.score) });
       g.reset();

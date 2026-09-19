@@ -96,3 +96,17 @@ canvas {
 .scroll-thin::-webkit-scrollbar { width: 6px; }
 .scroll-thin::-webkit-scrollbar-track { background: rgba(255,255,255,0.04); border-radius: 99px; }
 .scroll-thin::-webkit-scrollbar-thumb { background: rgba(56,245,224,0.35); border-radius: 99px; }
+
+@keyframes guideFlow {
+  to { stroke-dashoffset: -64; }
+}
+.guide-trajectory { animation: guideFlow 1.8s linear infinite; }
+@keyframes guidePresence {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+.guide-portrait { animation: guidePresence 4s ease-in-out infinite; flex-shrink: 0; }
+button:focus-visible { outline: 2px solid #7dd3fc; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  .guide-trajectory, .guide-portrait, .anim-in, .anim-card, .anim-slam, .anim-pulse, .title-shine { animation: none; }
+}
