@@ -6,7 +6,9 @@ import { FX } from './fx';
 import { sfx } from './sfx';
 import { saveScore, saveBest, type ScoreRow } from './storage';
 import { THEMES, type ThemeDef, type StartConfig } from './meta';
-import { t as tr, shapeName, enemyName, type Lang } from '../i18n';
+import { t as tr, shapeName, enemyName, upgName, type Lang } from '../i18n';
+
+const PEER_TINT = ['#38f5e0', '#f472b6', '#fbbf24', '#a78bfa'];
 import { adjacentMount, adjacentSlot, aimAngle, segmentDistanceSq, type WeaponMount } from './aim';
 
 export type Phase = 'menu' | 'playing' | 'paused' | 'levelup' | 'dead';
@@ -23,6 +25,7 @@ interface Enemy {
   ax: number; ay: number;
   slow: number; frozen: number; scale: number; def: EnemyDef;
   hitCd: number; age: number;
+  tx: number; ty: number;
   // elemental status
   burn: number; burnDps: number;
   poison: number; poisonDps: number;
@@ -36,7 +39,7 @@ interface Proj {
   r: number; dmg: number; pierce: number; life: number;
   kind: WeaponDef_kind; color: string; rot: number; spin: number;
   homing: number; aoe: number; crit: boolean;
-  hits: number[]; bounced: number; split: number; trail: number;
+  hits: number[]; bounced: number; split: number; trail: number; owner: string;
 }
 type WeaponDef_kind = 'disc' | 'bullet' | 'orb' | 'ring' | 'shell' | 'missile';
 
@@ -46,26 +49,29 @@ interface EBullet {
   r: number; dmg: number; life: number; color: string; kind: number; rot: number;
 }
 
-interface Pickup { active: boolean; x: number; y: number; vx: number; vy: number; v: number; life: number; heal: boolean }
+interface Pickup { active: boolean; gid: number; x: number; y: number; vx: number; vy: number; v: number; life: number; heal: boolean; mine: string }
 
 interface Orbital { active: boolean; angle: number; dist: number; r: number; dmg: number; color: string; kind: number; spin: number; x: number; y: number }
 
 interface Helper { active: boolean; x: number; y: number; vx: number; vy: number; cd: number; life: number; dmg: number; kind: number; r: number; rot: number; color: string }
 
-interface Mine { active: boolean; x: number; y: number; t: number; r: number; dmg: number; armed: number }
+interface Mine { active: boolean; x: number; y: number; t: number; r: number; dmg: number; armed: number; own: string }
+
+/** Which player landed a given projectile (for co-op kill credit). */
+const byOf = (p: { owner?: string }) => p.owner || '';
 
 interface Hazard {
   active: boolean; x: number; y: number; r: number;
   delay: number; windup: number; life: number; dmg: number; color: string;
 }
 
-/** A cooperative partner driven by an authoritative snapshot from their tab. */
+/** A cooperative partner: their own client drives them, we render + attract them. */
 export interface Peer {
   id: string;
   name: string;
   color: string;
   x: number; y: number;
-  tx: number; ty: number;      // latest network target position
+  tx: number; ty: number;
   vx: number; vy: number;
   hp: number; maxHp: number;
   alive: boolean;
@@ -76,8 +82,9 @@ export interface Peer {
   shape: string;
   fireCd: number;
   lastSeen: number;
-  revived: number;             // seconds of revival immunity left
+  revived: number;
   respawnT: number;
+  shots: ProjSnap[];
 }
 
 /** Compact per-frame description of one projectile for the wire. */
@@ -86,60 +93,49 @@ export interface ProjSnap {
   c: string; k: number;
 }
 
-export interface Snapshot {
-  t: number;
-  elapsed: number;
-  wave: number;
-  score: number;
-  phase: Phase;
-  countdown: number;
-  chooser: string;
-  chooserName: string;
-  choices?: Choice[];
-  banner: string;
-  bannerT: number;
-  me: { x: number; y: number; hp: number; maxHp: number; level: number; alive: boolean };
-  peers: Array<Omit<Peer, 'tx' | 'ty' | 'lastSeen' | 'fireCd' | 'respawnT'>>;
-  enemies: Array<{
-    id: number;
-    x: number;
-    y: number;
-    r: number;
-    s: number;
-    hp: number;
-    maxHp: number;
-    rot: number;
-    col: string;
-    boss: boolean;
-    frozen: number;
-    burn: number;
-    poison: number;
-  }>;
-  hazards: Array<{ x: number; y: number; r: number; delay: number; windup: number; color: string }>;
-  ebullets?: Array<{ x: number; y: number; vx: number; vy: number; r: number; color: string; kind: number }>;
-  shots: ProjSnap[];
-  gems: Array<{ x: number; y: number; v: number; heal: boolean }>;
-}
-
-export interface GuestSyncData {
+/** One player's avatar, as reported to everybody else. */
+export interface Avatar {
   id: string;
   name: string;
   color: string;
+  x: number; y: number;
+  hp: number; maxHp: number;
+  level: number; xp: number; xpNeed: number;
+  score: number; kills: number;
   shape: string;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  aimA: number;
-  hp: number;
-  maxHp: number;
   alive: boolean;
-  level: number;
-  xp: number;
-  xpNeed: number;
-  score: number;
-  kills: number;
-  weapons: WeaponId[];
+  invuln: number;
+  aim: number;
+  shots: ProjSnap[];
+}
+
+export interface EnemySnap {
+  i: number; x: number; y: number; r: number; s: number;
+  hp: number; maxHp: number; rot: number; col: string; boss: boolean;
+  frozen: number; burn: number; poison: number;
+}
+export interface EBulletSnap { x: number; y: number; vx: number; vy: number; r: number; dmg: number; kind: number; col: string }
+export interface HazardSnap { x: number; y: number; r: number; delay: number; windup: number; dmg: number; col: string }
+export interface GemSnap { i: number; x: number; y: number; heal: boolean; v: number }
+export interface PickerCard { key: string; name: string; icon: string; rarity: number; level: number; max: number; kind: string; color: string }
+export interface PickerState { name: string; id: string; cards: PickerCard[]; chosen: string }
+
+/** Host -> guests: the world, plus every avatar in it. */
+export interface World {
+  el: number;
+  wave: number;
+  phase: Phase;
+  countdown: number;
+  chooserId: string;
+  picker: PickerState | null;
+  banner: string;
+  bannerT: number;
+  enemies: EnemySnap[];
+  shots: ProjSnap[];
+  eb: EBulletSnap[];
+  hz: HazardSnap[];
+  gems: GemSnap[];
+  avatars: Avatar[];
 }
 
 export interface PublicState {
@@ -154,7 +150,6 @@ export interface PublicState {
   shapeId: string;
   weapons: WeaponId[];
   choices: Choice[];
-  partnerChoices?: Choice[];
   rerolls: number;
   wave: number;
   combo: number;
@@ -163,7 +158,10 @@ export interface PublicState {
   coinsEarned: number;
   // cooperative session
   coop: boolean;
-  isGuest: boolean;
+  isHost: boolean;
+  netKind: 'solo' | 'net' | 'local';
+  picker: PickerState | null;
+  partnerScore: number;
   selfId: string;
   countdown: number;
   chooserId: string;
@@ -263,8 +261,8 @@ export class Game {
   /* ---------------- cooperative multiplayer ---------------- */
   /** True once a lobby session is driving this instance. */
   coop = false;
-  /** Guests render host snapshots instead of simulating locally. */
-  isGuest = false;
+  /** Only the host simulates enemies, spawning and loot. Guests mirror it. */
+  isHost = true;
   selfId = 'local';
   selfName = 'PLAYER';
   selfColor = '#38f5e0';
@@ -273,19 +271,18 @@ export class Game {
   chooserId = '';
   chooserName = '';
   countdown = 0;
-  /** Set by the host so the shell can push a snapshot out on the wire. */
-  onSnapshot: ((snap: Snapshot) => void) | null = null;
-  /** Set by a guest so the shell can ask the host to apply an upgrade. */
-  onPickRequest: ((key: string) => void) | null = null;
-  onGuestSync: ((sync: GuestSyncData) => void) | null = null;
-  onDamageEnemyNet: ((enemyId: number, dmg: number, crit: boolean, kx: number, ky: number) => void) | null = null;
-  onCollectPickupNet: ((x: number, y: number, heal: boolean, v: number) => void) | null = null;
-  onPeerLevelUpRequest: ((choices: Choice[]) => void) | null = null;
-  onPeerLevelUpDone: ((key: string) => void) | null = null;
-  partnerChoices: Choice[] = [];
+  /** Outbound pipe installed by the shell (Session.send). */
+  onNet: ((type: string, payload: Record<string, unknown>) => void) | null = null;
+  remoteKind: 'net' | 'local' = 'net';
+  /** Whose upgrade picker is open right now, mirrored on every client. */
+  picker: PickerState | null = null;
   private snapT = 0;
-  private guestSyncT = 0;
+  private avT = 0;
   private peerReviveT = 0;
+  private gid = 1;
+  /** Per-enemy target: the closest living player, host or partner. */
+  focX = 0; focY = 0; focVX = 0; focVY = 0;
+  private focPeer: Peer | null = null;
 
   // background
   stars: { x: number; y: number; z: number }[] = [];
@@ -296,14 +293,14 @@ export class Game {
     this.onState = onState;
     for (let i = 0; i < 500; i++) this.projs.push({
       active: false, x: 0, y: 0, vx: 0, vy: 0, r: 4, dmg: 1, pierce: 0, life: 0,
-      kind: 'bullet', color: '#fff', rot: 0, spin: 0, homing: 0, aoe: 0, crit: false, hits: [], bounced: 0, split: 0, trail: 0,
+      kind: 'bullet', color: '#fff', rot: 0, spin: 0, homing: 0, aoe: 0, crit: false, hits: [], bounced: 0, split: 0, trail: 0, owner: '',
     });
     for (let i = 0; i < 320; i++) this.ebullets.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, r: 5, dmg: 1, life: 0, color: '#f87171', kind: 0, rot: 0 });
     for (let i = 0; i < 130; i++) this.enemies.push(this.blankEnemy());
-    for (let i = 0; i < 800; i++) this.pickups.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, v: 1, life: 0, heal: false });
+    for (let i = 0; i < 260; i++) this.pickups.push({ active: false, gid: 0, x: 0, y: 0, vx: 0, vy: 0, v: 1, life: 0, heal: false, mine: '' });
     for (let i = 0; i < 26; i++) this.orbitals.push({ active: false, angle: 0, dist: 0, r: 10, dmg: 1, color: '#fff', kind: 0, spin: 0, x: 0, y: 0 });
     for (let i = 0; i < 60; i++) this.helpers.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, cd: 0, life: 0, dmg: 1, kind: 0, r: 8, rot: 0, color: '#fff' });
-    for (let i = 0; i < 30; i++) this.mines.push({ active: false, x: 0, y: 0, t: 0, r: 0, dmg: 0, armed: 0 });
+    for (let i = 0; i < 30; i++) this.mines.push({ active: false, x: 0, y: 0, t: 0, r: 0, dmg: 0, armed: 0, own: '' });
     for (let i = 0; i < 36; i++) this.hazards.push({ active: false, x: 0, y: 0, r: 0, delay: 0, windup: 1, life: 0, dmg: 0, color: '#ff6b6b' });
     this.resize();
   }
@@ -313,6 +310,7 @@ export class Game {
       active: false, id: 0, x: 0, y: 0, vx: 0, vy: 0, r: 12, sides: 0, hp: 1, maxHp: 1,
       dmg: 1, speed: 50, xp: 1, score: 1, rot: 0, spin: 0, flash: 0,
       atk: 'melee', atkT: 1, windup: 0, state: 0, ax: 0, ay: 0, slow: 0, frozen: 0, scale: 1, hitCd: 0, age: 0,
+      tx: 0, ty: 0,
       burn: 0, burnDps: 0, poison: 0, poisonDps: 0, marked: 0, voided: 0,
       enraged: false, auxT: 1,
       def: ENEMIES.ecircle,
@@ -406,13 +404,14 @@ export class Game {
     this.hp = this.maxHp;
     this.shield = this.shieldMax; this.shieldT = 0;
     this.centerCamera();
-    this.chooserId = ''; this.chooserName = '';
-    if (this.coop) {
+    this.chooserId = ''; this.chooserName = ''; this.picker = null;
+    this.gid = 1;
+    if (this.coop && this.isHost) {
       for (const p of this.peers) {
         p.alive = true; p.hp = p.maxHp; p.invuln = 2.5; p.revived = 0;
         p.x = p.tx = this.px + rnd(-110, 110);
         p.y = p.ty = this.py + rnd(-110, 110);
-        p.level = 1; p.xp = 0; p.xpNeed = 8; p.score = 0; p.kills = 0;
+        p.level = 1; p.xp = 0; p.xpNeed = 8; p.score = 0; p.kills = 0; p.shots = [];
       }
       this.peerReviveT = 0;
     }
@@ -426,9 +425,9 @@ export class Game {
   /* ------------------------------------------------ cooperative multiplayer */
 
   /** Prepare this instance to host or join a lobby session. */
-  beginCoop(cfg: { selfId: string; selfName: string; selfColor: string; isGuest: boolean }) {
+  beginCoop(cfg: { selfId: string; selfName: string; selfColor: string; isHost: boolean }) {
     this.coop = true;
-    this.isGuest = cfg.isGuest;
+    this.isHost = cfg.isHost;
     this.selfId = cfg.selfId;
     this.selfName = cfg.selfName;
     this.selfColor = cfg.selfColor;
@@ -439,12 +438,44 @@ export class Game {
     this.snapT = 0;
     this.peerReviveT = 0;
     this.recompute();
-    if (!cfg.isGuest) this.reset();
+    if (cfg.isHost) {
+      this.reset();
+    } else {
+      // Guests own their own build, so they need the same fresh start the host
+      // gets — without touching the world state the host is authoritative over.
+      this.shapeId = 'circle';
+      this.weapons = ['disc'];
+      this.wcd = [0];
+      this.mods = { ...this.startMods };
+      this.owned = {};
+      this.level = 1; this.xp = 0; this.xpNeed = 8;
+      this.score = 0; this.kills = 0; this.combo = 0; this.comboT = 0;
+      this.hasDash = false; this.dashCd = 0; this.dashT = 0;
+      this.rerolls = this.rerollTokens; this.pendingLevels = 0; this.choices = [];
+      this.invuln = 3;
+      this.recompute();
+      this.hp = this.maxHp;
+      this.shield = this.shieldMax; this.shieldT = 0;
+      for (const e of this.enemies) e.active = false;
+      for (const b of this.ebullets) b.active = false;
+      for (const p of this.projs) p.active = false;
+      for (const p of this.pickups) p.active = false;
+      for (const h of this.hazards) h.active = false;
+      for (const o of this.orbitals) o.active = false;
+      for (const h of this.helpers) h.active = false;
+      for (const m of this.mines) m.active = false;
+      this.fx.reset();
+      this.phase = 'playing';
+      this.px = this.worldW / 2; this.py = this.worldH / 2;
+      this.pvx = this.pvy = 0;
+      this.centerCamera();
+      this.push();
+    }
   }
 
   endCoop() {
     this.coop = false;
-    this.isGuest = false;
+    this.isHost = true;
     this.peers = [];
     this.chooserId = '';
     this.chooserName = '';
@@ -467,7 +498,7 @@ export class Game {
           tx: this.px, ty: this.py, vx: 0, vy: 0,
           hp: this.maxHp, maxHp: this.maxHp, alive: true, invuln: 2.5,
           level: 1, xp: 0, xpNeed: 8, score: 0, kills: 0, shape: this.shapeId,
-          fireCd: 0, lastSeen: this.elapsed, revived: 0, respawnT: 0,
+          fireCd: 0, lastSeen: this.elapsed, revived: 0, respawnT: 0, shots: [],
         };
         this.peers.push(peer);
         this.fx.ring(peer.x, peer.y, 10, 90, 0.5, 5, peer.color);
@@ -479,257 +510,20 @@ export class Game {
     this.peers = this.peers.filter((p) => seen.has(p.id));
   }
 
-  /** Guests call this when the host's snapshot arrives. */
-  applySnapshot(snap: Snapshot) {
-    this.elapsed = snap.elapsed;
-    this.wave = snap.wave;
-    this.score = snap.score;
-    this.phase = snap.phase;
-    this.countdown = snap.countdown;
-    this.chooserId = snap.chooser;
-    this.chooserName = snap.chooserName;
-    if (snap.bannerT > this.bannerT || snap.banner !== this.bannerText) {
-      this.bannerText = snap.banner;
-      this.bannerT = snap.bannerT;
-    }
+  /* ============ cooperative networking ============
+     The host owns the world (enemies, spawning, loot, hazards). Every client —
+     host and guests alike — owns its own avatar: movement, dash, weapons, build,
+     level and HP. Guests mirror the world from `world` messages and stream back
+     their avatar plus the damage they land.
+     ================================================== */
 
-    // Own vitals come from the authoritative peer record. Position stays local:
-    // the guest simulates its own movement and streams it to the host.
-    const mine = snap.peers.find((p) => p.id === this.selfId);
-    if (mine) {
-      this.hp = mine.hp; this.maxHp = mine.maxHp;
-      this.level = mine.level; this.xp = mine.xp;
-      this.xpNeed = mine.xpNeed; this.score = mine.score;
-    } else if (snap.me) {
-      this.maxHp = snap.me.maxHp;
-      this.level = snap.me.level;
-    }
-
-    // Everyone except ourselves is rendered as a coloured partner.
-    this.peers = snap.peers
-      .filter((p) => p.id !== this.selfId)
-      .map((p) => {
-        const existing = this.peers.find((old) => old.id === p.id);
-        return {
-          ...p,
-          tx: p.x, ty: p.y,
-          vx: existing ? existing.vx : 0,
-          vy: existing ? existing.vy : 0,
-          fireCd: existing ? existing.fireCd : 0,
-          lastSeen: this.elapsed,
-          respawnT: 0,
-        };
-      });
-
-    if (snap.choices && snap.choices.length > 0) {
-      this.partnerChoices = snap.choices;
-    }
-
-    // world entities
-    for (let i = 0; i < this.enemies.length; i++) {
-      const e = this.enemies[i];
-      const s = snap.enemies[i];
-      if (!s) { e.active = false; continue; }
-      e.active = true;
-      e.id = s.id;
-      if (Math.hypot(e.x - s.x, e.y - s.y) > 120) {
-        e.x = s.x; e.y = s.y;
-      } else {
-        e.x += (s.x - e.x) * 0.45;
-        e.y += (s.y - e.y) * 0.45;
-      }
-      e.r = s.r; e.sides = s.s;
-      e.hp = s.hp; e.maxHp = s.maxHp; e.rot = s.rot;
-      e.frozen = s.frozen; e.burn = s.burn; e.poison = s.poison;
-      if (!e.def || e.def.color !== s.col) {
-        const match = Object.values(ENEMIES).find((d) => d.color === s.col && Boolean(d.boss) === s.boss);
-        if (match) e.def = match;
-      }
-    }
-    for (let i = snap.enemies.length; i < this.enemies.length; i++) this.enemies[i].active = false;
-
-    // hazards sync
-    if (snap.hazards) {
-      for (let i = 0; i < this.hazards.length; i++) {
-        const h = this.hazards[i];
-        const s = snap.hazards[i];
-        if (!s) { h.active = false; continue; }
-        h.active = true;
-        h.x = s.x; h.y = s.y; h.r = s.r;
-        h.delay = s.delay; h.windup = s.windup; h.color = s.color;
-      }
-      for (let i = snap.hazards.length; i < this.hazards.length; i++) this.hazards[i].active = false;
-    }
-
-    // pickups sync
-    for (let i = 0; i < this.pickups.length; i++) {
-      const p = this.pickups[i];
-      const s = snap.gems[i];
-      if (!s) { p.active = false; continue; }
-      p.active = true; p.x = s.x; p.y = s.y; p.v = s.v; p.heal = s.heal;
-      p.life = s.heal ? 18 : Infinity;
-    }
-    for (let i = snap.gems.length; i < this.pickups.length; i++) this.pickups[i].active = false;
-
-    this.centerCamera();
+  attachNet(kind: 'net' | 'local', send: (type: string, payload: Record<string, unknown>) => void) {
+    this.remoteKind = kind;
+    this.onNet = send;
   }
 
-  buildGuestSync(): GuestSyncData {
-    return {
-      id: this.selfId,
-      name: this.selfName,
-      color: this.selfColor,
-      shape: this.shapeId,
-      x: Math.round(this.px),
-      y: Math.round(this.py),
-      vx: Math.round(this.pvx),
-      vy: Math.round(this.pvy),
-      aimA: +this.aimA.toFixed(2),
-      hp: Math.round(this.hp),
-      maxHp: Math.round(this.maxHp),
-      alive: this.hp > 0,
-      level: this.level,
-      xp: Math.round(this.xp),
-      xpNeed: this.xpNeed,
-      score: Math.round(this.score),
-      kills: this.kills,
-      weapons: this.weapons.slice(),
-    };
-  }
-
-  updatePeerFromNet(data: GuestSyncData) {
-    let peer = this.peers.find((p) => p.id === data.id);
-    if (!peer) {
-      peer = {
-        id: data.id,
-        name: data.name,
-        color: data.color,
-        shape: data.shape,
-        x: data.x,
-        y: data.y,
-        tx: data.x,
-        ty: data.y,
-        vx: data.vx,
-        vy: data.vy,
-        hp: data.hp,
-        maxHp: data.maxHp,
-        alive: data.alive,
-        invuln: 0,
-        level: data.level,
-        xp: data.xp,
-        xpNeed: data.xpNeed,
-        score: data.score,
-        kills: data.kills,
-        fireCd: 0,
-        lastSeen: this.elapsed,
-        revived: 0,
-        respawnT: 0,
-      };
-      this.peers.push(peer);
-    } else {
-      peer.name = data.name;
-      peer.color = data.color;
-      peer.shape = data.shape;
-      peer.tx = data.x;
-      peer.ty = data.y;
-      peer.vx = data.vx;
-      peer.vy = data.vy;
-      peer.hp = data.hp;
-      peer.maxHp = data.maxHp;
-      peer.alive = data.alive;
-      peer.level = data.level;
-      peer.xp = data.xp;
-      peer.xpNeed = data.xpNeed;
-      peer.score = data.score;
-      peer.kills = data.kills;
-      peer.lastSeen = this.elapsed;
-    }
-  }
-
-  applyNetHit(id: number, dmg: number, crit: boolean, kx: number, ky: number) {
-    const enemy = this.enemies.find((item) => item.active && item.id === id);
-    if (enemy) {
-      this.damageEnemy(enemy, dmg, crit, kx, ky);
-    }
-  }
-
-  /** Host side: describe the world compactly for the wire. */
-  buildSnapshot(): Snapshot {
-    const enemies: Snapshot['enemies'] = [];
-    for (const e of this.enemies) {
-      if (!e.active) continue;
-      enemies.push({
-        id: e.id,
-        x: Math.round(e.x), y: Math.round(e.y), r: e.r, s: e.sides,
-        hp: Math.round(e.hp), maxHp: Math.round(e.maxHp), rot: +e.rot.toFixed(2),
-        col: e.def.color, boss: Boolean(e.def.boss),
-        frozen: +e.frozen.toFixed(1), burn: +e.burn.toFixed(1), poison: +e.poison.toFixed(1),
-      });
-    }
-    const shots: ProjSnap[] = [];
-    for (const p of this.projs) {
-      if (!p.active) continue;
-      shots.push({
-        x: Math.round(p.x), y: Math.round(p.y),
-        vx: Math.round(p.vx), vy: Math.round(p.vy),
-        r: +p.r.toFixed(1), c: p.color, k: ['disc', 'bullet', 'orb', 'ring', 'shell', 'missile'].indexOf(p.kind),
-      });
-    }
-    const gems: Snapshot['gems'] = [];
-    for (const p of this.pickups) {
-      if (!p.active) continue;
-      gems.push({ x: Math.round(p.x), y: Math.round(p.y), v: Math.round(p.v), heal: p.heal });
-    }
-    const hazards: Snapshot['hazards'] = [];
-    for (const h of this.hazards) {
-      if (!h.active) continue;
-      hazards.push({ x: Math.round(h.x), y: Math.round(h.y), r: h.r, delay: +h.delay.toFixed(2), windup: +h.windup.toFixed(2), color: h.color });
-    }
-    return {
-      t: Date.now(),
-      elapsed: +this.elapsed.toFixed(2),
-      wave: this.wave,
-      score: Math.round(this.score),
-      phase: this.phase,
-      countdown: +this.countdown.toFixed(1),
-      chooser: this.chooserId,
-      chooserName: this.chooserName,
-      choices: this.choices,
-      banner: this.bannerText,
-      bannerT: +this.bannerT.toFixed(2),
-      me: {
-        x: Math.round(this.px), y: Math.round(this.py),
-        hp: Math.round(this.hp), maxHp: Math.round(this.maxHp),
-        level: this.level, alive: this.hp > 0,
-      },
-      peers: [
-        // the host is just another partner from the guest's point of view
-        {
-          id: this.selfId, name: this.selfName, color: this.selfColor,
-          x: Math.round(this.px), y: Math.round(this.py),
-          vx: Math.round(this.pvx), vy: Math.round(this.pvy),
-          hp: Math.round(this.hp), maxHp: Math.round(this.maxHp),
-          alive: this.hp > 0, invuln: +this.invuln.toFixed(1),
-          level: this.level, xp: Math.round(this.xp), xpNeed: this.xpNeed,
-          score: Math.round(this.score), kills: this.kills,
-          shape: this.shapeId, revived: 0,
-        },
-        ...this.peers.map((p) => ({
-          id: p.id, name: p.name, color: p.color,
-          x: Math.round(p.x), y: Math.round(p.y),
-          vx: Math.round(p.vx), vy: Math.round(p.vy),
-          hp: Math.round(p.hp), maxHp: Math.round(p.maxHp),
-          alive: p.alive, invuln: +p.invuln.toFixed(1),
-          level: p.level, xp: Math.round(p.xp), xpNeed: p.xpNeed,
-          score: Math.round(p.score), kills: p.kills,
-          shape: p.shape, revived: +p.revived.toFixed(1),
-        })),
-      ],
-      enemies,
-      hazards,
-      shots,
-      gems,
-    };
+  send(type: string, payload: Record<string, unknown> = {}) {
+    try { this.onNet?.(type, payload); } catch { /* transport gone: never break the run */ }
   }
 
   /** Host: the 3-2-1 gate that runs before a lobby match begins. */
@@ -740,83 +534,314 @@ export class Game {
     this.push();
   }
 
-  /** Host: a partner died but the run continues — they spectate. */
-  killPeer(id: string) {
-    const peer = this.peers.find((p) => p.id === id);
-    if (!peer) return;
-    peer.alive = false;
-    peer.hp = 0;
-    this.fx.burst(peer.x, peer.y, 40, peer.color, { spd: 300, size: 4, life: 0.8 });
-    this.fx.ring(peer.x, peer.y, 12, 190, 0.6, 6, peer.color);
-    this.banner(tr(this.lang, 'bnr_allyDown', { name: peer.name }), 1.8);
+  /* ---------------- outbound ---------------- */
+
+  private shotsForWire(): ProjSnap[] {
+    const keys = ['disc', 'bullet', 'orb', 'ring', 'shell', 'missile'];
+    const out: ProjSnap[] = [];
+    for (const p of this.projs) {
+      if (!p.active || out.length >= 120) continue;
+      out.push({
+        x: Math.round(p.x), y: Math.round(p.y),
+        vx: Math.round(p.vx), vy: Math.round(p.vy),
+        r: Math.round(p.r), c: p.color, k: Math.max(0, keys.indexOf(p.kind)),
+      });
+    }
+    return out;
   }
 
-  /** Host: defeating a boss revives every fallen partner with 3s immunity. */
-  revivePeers() {
-    if (!this.coop) return;
-    if (this.elapsed - this.peerReviveT < 2) return; // avoid double-triggers
-    this.peerReviveT = this.elapsed;
-    let revived = 0;
-
-    // We might be the one who was spectating.
-    if (this.hp <= 0) {
-      this.hp = this.maxHp;
-      this.invuln = 3;
-      this.px = clamp(this.px, 40, this.worldW - 40);
-      this.py = clamp(this.py, 40, this.worldH - 40);
-      this.fx.ring(this.px, this.py, 12, 170, 0.7, 7, this.selfColor);
-      this.fx.burst(this.px, this.py, 32, this.selfColor, { spd: 280, size: 4, life: 0.8 });
-      revived++;
-    }
-    for (const peer of this.peers) {
-      if (peer.alive) continue;
-      peer.alive = true;
-      peer.hp = peer.maxHp;
-      peer.invuln = 3;
-      peer.revived = 3;
-      peer.x = this.px + rnd(-70, 70);
-      peer.y = this.py + rnd(-70, 70);
-      peer.tx = peer.x; peer.ty = peer.y;
-      this.fx.ring(peer.x, peer.y, 12, 150, 0.7, 7, peer.color);
-      this.fx.burst(peer.x, peer.y, 30, peer.color, { spd: 260, size: 4, life: 0.8 });
-      revived++;
-    }
-    if (revived > 0) {
-      this.banner(tr(this.lang, 'bnr_allyRevived'), 2);
-      this.fx.doFlash('#ffffff', 0.35, 0.3);
-    }
+  buildAvatar(): Avatar {
+    return {
+      id: this.selfId,
+      name: this.selfName,
+      color: this.selfColor,
+      x: Math.round(this.px), y: Math.round(this.py),
+      hp: Math.round(this.hp), maxHp: Math.round(this.maxHp),
+      level: this.level, xp: Math.round(this.xp), xpNeed: this.xpNeed,
+      score: Math.round(this.score), kills: this.kills,
+      shape: this.shapeId,
+      alive: this.hp > 0,
+      invuln: Math.round(this.invuln * 10) / 10,
+      aim: Math.round(this.aimA * 100) / 100,
+      shots: this.shotsForWire(),
+    };
   }
 
-  /** Host: damage a partner (bullets, hazards, contact). */
-  hurtPeer(id: string, dmg: number) {
-    const peer = this.peers.find((p) => p.id === id);
-    if (!peer || !peer.alive || peer.invuln > 0) return;
-    peer.hp -= Math.max(1, dmg);
-    peer.invuln = 0.7;
-    this.fx.burst(peer.x, peer.y, 10, '#ff6b81', { spd: 200, size: 3, life: 0.35 });
-    if (peer.hp <= 0) this.killPeer(id);
+  /** Host: describe the authoritative world for everyone else. */
+  buildWorld(): World {
+    const enemies: EnemySnap[] = [];
+    for (const e of this.enemies) {
+      if (!e.active) continue;
+      enemies.push({
+        i: e.id, x: Math.round(e.x), y: Math.round(e.y), r: Math.round(e.r), s: e.sides,
+        hp: Math.round(e.hp), maxHp: Math.round(e.maxHp),
+        rot: Math.round(e.rot * 100) / 100, col: e.def.color, boss: Boolean(e.def.boss),
+        frozen: Math.round(e.frozen * 10) / 10,
+        burn: Math.round(e.burn * 10) / 10, poison: Math.round(e.poison * 10) / 10,
+      });
+    }
+    const eb: EBulletSnap[] = [];
+    for (const b of this.ebullets) {
+      if (!b.active || eb.length >= 200) continue;
+      eb.push({
+        x: Math.round(b.x), y: Math.round(b.y), vx: Math.round(b.vx), vy: Math.round(b.vy),
+        r: Math.round(b.r), dmg: Math.round(b.dmg), kind: b.kind, col: b.color,
+      });
+    }
+    const hz: HazardSnap[] = [];
+    for (const h of this.hazards) {
+      if (!h.active || hz.length >= 40) continue;
+      hz.push({
+        x: Math.round(h.x), y: Math.round(h.y), r: Math.round(h.r),
+        delay: Math.round(h.delay * 100) / 100, windup: Math.round(h.windup * 100) / 100,
+        dmg: Math.round(h.dmg), col: h.color,
+      });
+    }
+    const gems: GemSnap[] = [];
+    for (const p of this.pickups) {
+      if (!p.active || gems.length >= 200) continue;
+      gems.push({ i: p.gid, x: Math.round(p.x), y: Math.round(p.y), heal: p.heal, v: Math.round(p.v) });
+    }
+    const avatars: Avatar[] = [this.buildAvatar()];
+    for (const p of this.peers) {
+      avatars.push({
+        id: p.id, name: p.name, color: p.color,
+        x: Math.round(p.x), y: Math.round(p.y),
+        hp: Math.round(p.hp), maxHp: Math.round(p.maxHp),
+        level: p.level, xp: Math.round(p.xp), xpNeed: p.xpNeed,
+        score: Math.round(p.score), kills: p.kills, shape: p.shape,
+        alive: p.alive, invuln: Math.round(p.invuln * 10) / 10, aim: 0, shots: p.shots,
+      });
+    }
+    return {
+      el: Math.round(this.elapsed * 10) / 10,
+      wave: this.wave,
+      phase: this.phase,
+      countdown: Math.round(this.countdown * 10) / 10,
+      chooserId: this.chooserId,
+      picker: this.picker,
+      banner: this.bannerText,
+      bannerT: Math.round(this.bannerT * 10) / 10,
+      enemies, shots: this.shotsForWire(), eb, hz, gems, avatars,
+    };
   }
 
-  /** Host: credit a level-up to a partner so the shared pause can name them. */
-  creditPeerXP(id: string, amount: number) {
-    const peer = this.peers.find((p) => p.id === id);
-    if (!peer || !peer.alive) return;
-    peer.xp += amount;
-    peer.score += amount * 2;
-    while (peer.xp >= peer.xpNeed) {
-      peer.xp -= peer.xpNeed;
-      peer.level++;
-      peer.xpNeed = Math.floor(8 + peer.level * 4.5 + Math.pow(peer.level, 1.6));
-      peer.hp = Math.min(peer.maxHp, peer.hp + peer.maxHp * 0.08);
-      // A partner's level-up pauses the whole run, exactly like our own.
-      if (!this.chooserId) {
-        this.chooserId = peer.id;
-        this.chooserName = peer.name;
-        if (this.phase === 'playing') {
-          this.rollChoices();
-          this.phase = 'levelup';
-          this.push();
+  /* ---------------- inbound ---------------- */
+
+  applyMessage(type: string, d: Record<string, unknown>, from: string) {
+    if (this.isHost) {
+      if (type === 'av') { const a = d.a as Avatar; if (a) this.applyAvatar(a); return; }
+      if (type === 'hit') {
+        const eid = Number(d.id), dmg = Number(d.d), crit = Boolean(d.crit);
+        if (!(dmg > 0)) return;
+        for (const e of this.enemies) {
+          if (e.active && e.id === eid) { this.damageEnemy(e, dmg, crit, 0, 0, 0, from); return; }
         }
+        return;
+      }
+      if (type === 'claim') { this.releaseGem(Number(d.id)); return; }
+      if (type === 'lvl') {
+        // A partner levelled up: the whole run pauses so everyone watches the pick.
+        const cards = Array.isArray(d.cards) ? (d.cards as PickerCard[]) : [];
+        this.chooserId = from;
+        this.chooserName = String(d.name || 'PARTNER');
+        this.picker = { name: this.chooserName, id: from, cards, chosen: '' };
+        if (this.phase === 'playing') this.phase = 'levelup';
+        this.push();
+        return;
+      }
+      if (type === 'done') {
+        if (this.picker) this.picker = { ...this.picker, chosen: String(d.key || '') };
+        this.chooserId = ''; this.chooserName = '';
+        if (this.phase === 'levelup') this.phase = 'playing';
+        this.push();
+        return;
+      }
+      if (type === 'bye') {
+        const gone = this.peers.find((x) => x.id === from);
+        if (gone) {
+          this.fx.burst(gone.x, gone.y, 22, gone.color, { spd: 240, size: 3, life: 0.6 });
+          this.peers = this.peers.filter((x) => x.id !== from);
+          this.banner(tr(this.lang, 'bnr_allyLeft', { name: gone.name }), 1.6);
+        }
+        return;
+      }
+      return;
+    }
+    if (type === 'world') { const w = d.w as World; if (w) this.applyWorld(w); return; }
+    if (type === 'boss') { this.celebrateBossKill(); return; }
+    if (type === 'over') { this.phase = 'dead'; this.push(); }
+  }
+
+  /** Host: absorb one partner's self-report. */
+  applyAvatar(a: Avatar) {
+    if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.y)) return;
+    let peer = this.peers.find((p) => p.id === a.id);
+    if (!peer) {
+      peer = {
+        id: a.id, name: `PARTNER ${this.peers.length + 1}`,
+        color: PEER_TINT[(this.peers.length + 1) % PEER_TINT.length],
+        x: a.x, y: a.y, tx: a.x, ty: a.y, vx: 0, vy: 0,
+        hp: a.hp, maxHp: Math.max(1, a.maxHp), alive: true, invuln: 2.5,
+        level: a.level, xp: a.xp, xpNeed: a.xpNeed, score: a.score, kills: a.kills,
+        shape: a.shape, fireCd: 0, lastSeen: this.elapsed, revived: 0, respawnT: 0, shots: [],
+      };
+      this.peers.push(peer);
+      this.fx.ring(peer.x, peer.y, 10, 90, 0.5, 5, peer.color);
+      this.banner(tr(this.lang, 'bnr_allyHere', { name: peer.name }), 1.4);
+    }
+    if (a.name) peer.name = a.name;
+    if (a.color) peer.color = a.color;
+    peer.tx = a.x; peer.ty = a.y;
+    peer.hp = Math.max(0, a.hp); peer.maxHp = Math.max(1, a.maxHp);
+    peer.alive = a.alive && a.hp > 0;
+    peer.level = a.level; peer.xp = a.xp; peer.xpNeed = a.xpNeed;
+    peer.score = a.score; peer.kills = a.kills;
+    peer.shape = a.shape in SHAPES ? a.shape : 'circle';
+    peer.invuln = Math.max(peer.invuln, a.invuln);
+    peer.revived = Math.max(0, peer.revived - 0.08);
+    peer.shots = a.shots || [];
+    peer.lastSeen = this.elapsed;
+  }
+
+  /** Guest: mirror the host's world, then keep it moving between packets. */
+  applyWorld(w: World) {
+    this.elapsed = w.el;
+    this.wave = w.wave;
+    this.countdown = w.countdown;
+    this.chooserId = w.chooserId;
+    this.picker = w.picker || null;
+    this.chooserName = w.picker ? w.picker.name : '';
+    if (w.banner !== this.bannerText || w.bannerT >= this.bannerT) {
+      this.bannerText = w.banner; this.bannerT = w.bannerT;
+    }
+    // The host owns the run phase, except while *this* client is choosing.
+    const iChoosing = this.phase === 'levelup' && this.chooserId === this.selfId;
+    if (!iChoosing) this.phase = w.phase;
+
+    // enemies: upsert by host id, lerp toward the reported spot
+    const seen = new Set<number>();
+    for (const s of w.enemies) {
+      seen.add(s.i);
+      let e = this.enemies.find((x) => x.active && x.id === s.i);
+      if (!e) {
+        const slot = this.freeEnemy();
+        if (!slot) continue;
+        e = slot;
+        e.active = true; e.id = s.i;
+        e.x = s.x; e.y = s.y; e.flash = 0; e.vx = 0; e.vy = 0; e.age = 2;
+        e.burn = 0; e.burnDps = 0; e.poison = 0; e.poisonDps = 0;
+        e.marked = 0; e.voided = 0; e.hitCd = 0; e.frozen = 0; e.state = 0; e.windup = 0;
+        e.enraged = false; e.auxT = 1; e.ax = 0; e.ay = 0; e.spin = 0;
+      }
+      const wasNew = e.hp <= 0;
+      e.tx = s.x; e.ty = s.y;
+      e.r = s.r; e.sides = s.s; e.hp = s.hp; e.maxHp = s.maxHp; e.rot = s.rot;
+      e.frozen = s.frozen; e.burn = s.burn; e.poison = s.poison;
+      if (wasNew || !e.def || e.def.color !== s.col) {
+        const match = Object.values(ENEMIES).find((x) => x.color === s.col && Boolean(x.boss) === s.boss);
+        if (match) {
+          e.def = match;
+          e.atk = match.atk; e.atkT = match.atkCd; e.dmg = match.dmg; e.speed = match.speed;
+        }
+      }
+      e.x = clamp(e.x, -80, this.worldW + 80);
+      e.y = clamp(e.y, -80, this.worldH + 80);
+    }
+    for (const e of this.enemies) if (e.active && !seen.has(e.id)) e.active = false;
+
+    // our own projectiles stay ours; partners' shots are drawn from avatars
+    // enemy bullets: match nearest, else spawn (so travel stays smooth)
+    const usedB = new Set<EBulletSnap>();
+    for (const b of this.ebullets) {
+      if (!b.active) continue;
+      let best: EBulletSnap | null = null; let bd = 45 * 45;
+      for (let i = 0; i < w.eb.length; i++) {
+        if (usedB.has(w.eb[i])) continue;
+        const dd = (w.eb[i].x - b.x) ** 2 + (w.eb[i].y - b.y) ** 2;
+        if (dd < bd) { bd = dd; best = w.eb[i]; }
+      }
+      if (!best) b.active = false;
+      else { usedB.add(best); b.color = best.col; b.dmg = best.dmg; b.kind = best.kind; }
+    }
+    for (const s of w.eb) {
+      if (usedB.has(s)) continue;
+      const b = this.freeEB();
+      if (!b) break;
+      b.active = true; b.x = s.x; b.y = s.y; b.vx = s.vx; b.vy = s.vy;
+      b.r = s.r; b.dmg = s.dmg; b.color = s.col; b.kind = s.kind; b.rot = 0; b.life = 5;
+    }
+
+    // hazards: rebuilt each packet, counted down locally
+    for (const h of this.hazards) h.active = false;
+    for (const s of w.hz) {
+      const h = this.hazards.find((x) => !x.active);
+      if (!h) break;
+      h.active = true; h.x = s.x; h.y = s.y; h.r = s.r;
+      h.delay = s.delay; h.windup = s.windup || 1.1; h.dmg = s.dmg; h.color = s.col; h.life = 0.3;
+    }
+
+    // gems: the host owns them, so mirror the list but keep our own pickups
+    const seenG = new Set<number>();
+    for (const g of w.gems) {
+      seenG.add(g.i);
+      let p = this.pickups.find((x) => x.active && x.gid === g.i);
+      if (!p) {
+        p = this.pickups.find((x) => !x.active);
+        if (!p) continue;
+        p.active = true; p.gid = g.i; p.x = g.x; p.y = g.y; p.vx = 0; p.vy = 0; p.mine = '';
+      }
+      if (p.mine !== this.selfId) { p.x = g.x; p.y = g.y; }
+      p.v = g.v; p.heal = g.heal; p.life = 9999;
+    }
+    for (const p of this.pickups) if (p.active && !seenG.has(p.gid) && p.mine !== this.selfId) p.active = false;
+
+    // everyone else (host included) is a partner avatar
+    const ids = new Set<string>();
+    const list: Array<{ id: string; name: string; color: string }> = [];
+    for (const a of w.avatars) {
+      if (a.id === this.selfId) continue;
+      ids.add(a.id);
+      list.push({ id: a.id, name: a.name || 'PARTNER', color: a.color || PEER_TINT[0] });
+    }
+    this.syncPeers(list);
+    for (const a of w.avatars) if (a.id !== this.selfId) this.applyAvatar(a);
+    this.centerCamera();
+  }
+
+  /** Host: free a gem a partner picked up (it is a shared floor object). */
+  releaseGem(gid: number) {
+    for (const p of this.pickups) {
+      if (p.active && p.gid === gid) { p.active = false; return; }
+    }
+  }
+
+  /** Guests: keep the mirrored world alive between packets. */
+  private lerpWorld(dt: number) {
+    const k = Math.min(1, dt * 14);
+    for (const e of this.enemies) {
+      if (!e.active) continue;
+      e.x += (e.tx - e.x) * k;
+      e.y += (e.ty - e.y) * k;
+      e.rot += (e.def && e.def.boss ? 0.5 : 0.9) * dt;
+      if (e.flash > 0) e.flash -= dt;
+      if (e.hitCd > 0) e.hitCd -= dt;
+      // contact damage is each client's own business
+      const reach = e.r + this.pr - 3;
+      if ((e.x - this.px) ** 2 + (e.y - this.py) ** 2 < reach * reach) {
+        if (e.hitCd <= 0) { e.hitCd = 0.55; this.hurtPlayer(e.dmg, e.x, e.y); }
+      }
+    }
+    for (const h of this.hazards) {
+      if (!h.active) continue;
+      if (h.delay > 0) {
+        h.delay -= dt;
+        if (h.delay <= 0 && Math.hypot(this.px - h.x, this.py - h.y) < h.r + this.pr) {
+          this.hurtPlayer(h.dmg, h.x, h.y);
+        }
+      } else {
+        h.life -= dt;
+        if (h.life <= 0) h.active = false;
       }
     }
   }
@@ -825,83 +850,103 @@ export class Game {
     for (const peer of this.peers) {
       if (peer.invuln > 0) peer.invuln -= dt;
       if (peer.revived > 0) peer.revived -= dt;
-
-      if (this.isGuest) {
-        // Guests only ease toward the authoritative position.
-        const k = Math.min(1, dt * 11);
-        peer.x += (peer.tx - peer.x) * k;
-        peer.y += (peer.ty - peer.y) * k;
-        continue;
-      }
-
-      if (!peer.alive) continue;
-
-      // ease toward the position the partner reported
-      const k = Math.min(1, dt * 9);
-      const dx = peer.tx - peer.x;
-      const dy = peer.ty - peer.y;
-      peer.vx = dx * k / Math.max(dt, 0.0001) * 0.001;
-      peer.vy = dy * k / Math.max(dt, 0.0001) * 0.001;
-      peer.x += dx * k;
-      peer.y += dy * k;
-      peer.x = clamp(peer.x, 10, this.worldW - 10);
-      peer.y = clamp(peer.y, 10, this.worldH - 10);
-
-      // partners draw enemy contact damage just like the local player
-      for (const e of this.enemies) {
-        if (!e.active) continue;
-        const reach = e.r + 22;
-        if ((e.x - peer.x) ** 2 + (e.y - peer.y) ** 2 < reach * reach) {
-          this.hurtPeer(peer.id, e.dmg * 0.55);
-          const a = Math.atan2(peer.y - e.y, peer.x - e.x);
-          e.vx -= Math.cos(a) * 120; e.vy -= Math.sin(a) * 120;
-        }
-      }
-
-      // ...and from enemy bullets / ground hazards
-      for (const b of this.ebullets) {
-        if (!b.active) continue;
-        const rr = 20 + b.r;
-        if ((b.x - peer.x) ** 2 + (b.y - peer.y) ** 2 < rr * rr) {
-          b.active = false;
-          this.hurtPeer(peer.id, b.dmg * 0.5);
-        }
-      }
-      for (const h of this.hazards) {
-        if (!h.active || h.delay > 0) continue;
-        if ((h.x - peer.x) ** 2 + (h.y - peer.y) ** 2 < (h.r + 18) ** 2) {
-          this.hurtPeer(peer.id, h.dmg * 0.5);
-        }
-      }
-
-      // partners fire on the nearest foe with the shared weapon set
-      peer.fireCd -= dt;
-      if (peer.fireCd <= 0) {
-        const target = this.nearestEnemy(peer.x, peer.y, 620);
-        if (target) {
-          peer.fireCd = 0.42;
-          const angle = Math.atan2(target.y - peer.y, target.x - peer.x);
-          const p = this.freeProj();
-          if (p) {
-            const weapon = WEAPONS[this.weapons[0] || 'disc'];
-            const speed = weapon.speed * (this.stats?.pspd || 1);
-            p.active = true;
-            p.x = peer.x; p.y = peer.y;
-            p.vx = Math.cos(angle) * speed; p.vy = Math.sin(angle) * speed;
-            p.r = Math.max(3, weapon.radius * (this.stats?.psize || 1) * 0.85);
-            p.dmg = weapon.dmg * (this.stats?.dmg || 1) * 0.85;
-            p.pierce = 1; p.life = 1.2;
-            p.kind = weapon.kind as Proj['kind'];
-            p.color = peer.color;
-            p.rot = angle; p.spin = 10;
-            p.homing = 0; p.aoe = 0; p.crit = false;
-            p.hits.length = 0; p.bounced = 0; p.split = 0; p.trail = 0;
-          }
-        } else {
-          peer.fireCd = 0.12;
-        }
+      const k = Math.min(1, dt * (this.isHost ? 10 : 13));
+      peer.x += (peer.tx - peer.x) * k;
+      peer.y += (peer.ty - peer.y) * k;
+      peer.vx = (peer.tx - peer.x) * 2;
+      peer.vy = (peer.ty - peer.y) * 2;
+      if (!this.isHost) continue;
+      // a silent partner is a disconnected one
+      if (this.elapsed - peer.lastSeen > 6) {
+        this.fx.burst(peer.x, peer.y, 10, '#ffffff', { spd: 120, size: 2.4, life: 0.4 });
+        peer.lastSeen = this.elapsed;
+        peer.alive = false;
       }
     }
+  }
+
+  /* ---------------- shared helpers ---------------- */
+
+  /** Aim an enemy at whichever living player it is closest to. */
+  private setFocus(e: Enemy) {
+    this.focX = this.px; this.focY = this.py;
+    this.focVX = this.pvx; this.focVY = this.pvy;
+    this.focPeer = null;
+    if (!this.coop) return;
+    let best: Peer | null = null;
+    let bd = Math.hypot(e.x - this.px, e.y - this.py);
+    for (const p of this.peers) {
+      if (!p.alive) continue;
+      const d = Math.hypot(e.x - p.x, e.y - p.y);
+      if (d < bd) { bd = d; best = p; }
+    }
+    if (best) {
+      this.focX = best.x; this.focY = best.y;
+      this.focVX = best.vx; this.focVY = best.vy;
+      this.focPeer = best;
+    }
+  }
+
+  /** Damage whoever this enemy is currently focused on. */
+  private hurtFocus(dmg: number, sx: number, sy: number) {
+    if (this.focPeer) {
+      this.fx.burst(this.focX, this.focY, 6, '#ff6b81', { spd: 160, size: 2.6, life: 0.28 });
+      return;
+    }
+    this.hurtPlayer(dmg, sx, sy);
+  }
+
+  /** A partner's level-up: the host just reflects their cards read-only. */
+  pickerCards(): PickerCard[] {
+    return this.choices.map((c) => ({
+      key: c.key,
+      name: upgName(this.lang, c.def.id, c.def.name),
+      icon: c.def.weapon ? WEAPONS[c.def.weapon].icon : c.def.icon,
+      rarity: c.def.rarity, level: c.level, max: c.def.max, kind: c.def.kind,
+      color: c.def.weapon ? WEAPONS[c.def.weapon].color : SHAPES[this.shapeId].color,
+    }));
+  }
+
+  private reportHit(e: Enemy, dmg: number, crit: boolean) {
+    this.send('hit', { id: e.id, d: Math.round(dmg), crit });
+  }
+
+  /** Both sides: a boss fell — everyone downed gets back up, immune for 3s. */
+  celebrateBossKill() {
+    if (this.elapsed - this.peerReviveT < 2) return;
+    this.peerReviveT = this.elapsed;
+    if (this.hp <= 0) {
+      this.hp = this.maxHp;
+      this.invuln = 3;
+      this.px = clamp(this.focSafeX(), 40, this.worldW - 40);
+      this.py = clamp(this.worldH / 2, 40, this.worldH - 40);
+      this.pvx = this.pvy = 0;
+      this.fx.ring(this.px, this.py, 12, 190, 0.7, 8, this.selfColor);
+      this.fx.burst(this.px, this.py, 36, this.selfColor, { spd: 300, size: 4, life: 0.9 });
+      this.banner(tr(this.lang, 'bnr_revived'), 2.2);
+      sfx.levelUp();
+    } else {
+      for (const peer of this.peers) {
+        if (peer.alive) continue;
+        peer.revived = 3;
+        this.fx.ring(peer.x, peer.y, 12, 150, 0.7, 7, peer.color);
+      }
+    }
+    this.fx.doFlash('#ffffff', 0.3, 0.3);
+    this.push();
+  }
+
+  private focSafeX() {
+    const ally = this.peers.find((p) => p.alive);
+    return ally ? ally.x + 40 : this.px;
+  }
+
+  /** Host: score a kill for a partner so their name/score updates. */
+  creditPeerScore(id: string, score: number) {
+    const peer = this.peers.find((p) => p.id === id);
+    if (!peer) return;
+    peer.score += score;
+    peer.kills += 1;
   }
 
   recompute() {
@@ -1108,27 +1153,25 @@ export class Game {
     this.choices = [];
     this.chooserId = '';
     this.chooserName = '';
+    if (this.coop) {
+      if (this.picker) this.picker = { ...this.picker, chosen: key };
+      if (!this.isHost) this.send('done', { key });
+    }
     sfx.buy();
     if (this.pendingLevels > 0 && this.availableChoices().length > 0) {
       this.pendingLevels--;
       this.rollChoices();
       this.phase = 'levelup';
-      if (this.coop) { this.chooserId = this.selfId; this.chooserName = this.selfName; }
+      this.chooserId = this.selfId;
+      this.chooserName = this.selfName;
+      this.picker = { name: this.selfName, id: this.selfId, cards: this.pickerCards(), chosen: '' };
+      if (this.coop && !this.isHost) this.send('lvl', { name: this.selfName, cards: this.picker.cards });
       this.push();
     } else {
       this.pendingLevels = 0;
       this.phase = 'playing';
       this.push();
     }
-  }
-
-  /** Guest: ask the host to apply the highlighted card on our behalf. */
-  requestPick(key: string) {
-    if (this.isGuest && this.onPickRequest) {
-      this.onPickRequest(key);
-      return;
-    }
-    this.pick(key);
   }
 
   applyUpgrade(d: UpgDef) {
@@ -1160,28 +1203,6 @@ export class Game {
 
   /* ------------------------------------------------ loop */
 
-  pauseForPeerLevelUp(who: string, name: string, choices: Choice[]) {
-    this.phase = 'levelup';
-    this.chooserId = who;
-    this.chooserName = name;
-    this.partnerChoices = choices;
-    this.push();
-  }
-
-  resumeFromPeerLevelUp(_who: string) {
-    this.phase = 'playing';
-    this.chooserId = '';
-    this.chooserName = '';
-    this.partnerChoices = [];
-    // Team reward drop
-    for (const peer of this.peers) {
-      if (!peer.alive) continue;
-      this.dropPickup(peer.x, peer.y, this.xpNeed * 0.35, false);
-      this.dropPickup(peer.x, peer.y, 0, true);
-    }
-    this.push();
-  }
-
   frame(dtRaw: number) {
     const dt = Math.min(0.05, dtRaw);
 
@@ -1194,25 +1215,25 @@ export class Game {
       if (this.fx.hitStop > 0) { this.fx.hitStop -= dt; }
       else this.update(sdt);
       this.fx.update(dt);
-      this.stateT += dt;
-      if (this.stateT > 0.2) { this.stateT = 0; this.push(); }
-
-      // Host streams snapshots to partners at 20Hz
-      if (this.coop && !this.isGuest && this.onSnapshot) {
-        this.snapT += dt;
-        if (this.snapT >= 0.05) { this.snapT = 0; this.onSnapshot(this.buildSnapshot()); }
-      }
-      // Guest streams player state to host at 20Hz
-      if (this.coop && this.isGuest && this.onGuestSync) {
-        this.guestSyncT += dt;
-        if (this.guestSyncT >= 0.05) { this.guestSyncT = 0; this.onGuestSync(this.buildGuestSync()); }
-      }
     } else {
-      this.fx.update(dt * 0.35);
-      if (this.phase === 'dead' || this.phase === 'menu') {
-        // keep world simmering for visual interest
+      this.fx.update(dt * (this.phase === 'levelup' ? 0.12 : 0.35));
+      if (this.coop) this.updatePeers(dt);
+    }
+
+    // Wire traffic: host streams the world, partners stream their avatar.
+    if (this.coop) {
+      this.snapT += dt;
+      this.avT += dt;
+      const tick = 0.075;
+      if (this.isHost) {
+        if (this.snapT >= tick) { this.snapT = 0; this.send('world', { w: this.buildWorld() }); }
+      } else if (this.avT >= 0.05) {
+        this.avT = 0; this.send('av', { a: this.buildAvatar() });
       }
     }
+
+    this.stateT += dt;
+    if (this.stateT > 0.2) { this.stateT = 0; this.push(); }
   }
 
   private update(dt: number) {
@@ -1234,49 +1255,34 @@ export class Game {
       }
     }
 
-    this.elapsed += dt;
+    if (this.isHost) this.elapsed += dt;
     if (this.coop) this.updatePeers(dt);
 
-    if (!this.isGuest) {
-      const newWave = Math.floor(this.elapsed / 30) + 1;
-      if (newWave !== this.wave) {
-        this.wave = newWave;
-        this.banner(tr(this.lang, 'bnr_wave', { n: this.wave }), 1.3);
-        sfx.buy();
-      }
+    const newWave = Math.floor(this.elapsed / 30) + 1;
+    if (newWave !== this.wave) {
+      this.wave = newWave;
+      this.banner(tr(this.lang, 'bnr_wave', { n: this.wave }), 1.3);
+      sfx.buy();
     }
     if (this.bannerT > 0) this.bannerT -= dt;
 
-    // BOTH host and guest run player movement and weapon targeting locally!
     this.updatePlayer(dt);
-
-    if (!this.isGuest) {
+    if (this.phase !== 'playing') { this.updateCamera(dt); return; }
+    if (this.isHost) {
       this.spawnDirector(dt);
       this.updateEnemies(dt);
-      if (this.phase !== 'playing') return;
-      this.updateMines(dt);
-    } else if (this.invuln <= 0 && this.hp > 0) {
-      for (const e of this.enemies) {
-        if (!e.active) continue;
-        const cr = e.r + this.pr - 3;
-        if ((this.px - e.x) ** 2 + (this.py - e.y) ** 2 < cr * cr) {
-          this.hurtPlayer(e.dmg, e.x, e.y);
-          break;
-        }
-      }
+      this.updateHazards(dt);
+      if (this.phase !== 'playing') { this.updateCamera(dt); return; }
+    } else {
+      this.lerpWorld(dt);
     }
-
-    this.updateHazards(dt);
-    if (this.phase !== 'playing') return;
-    this.updateEBullets(dt);
-    if (this.phase !== 'playing') return;
-
-    // Both host and guest simulate their own local projectiles, orbitals, helpers, pickups
     this.updateProjs(dt);
+    this.updateEBullets(dt);
     this.updatePickups(dt);
     if (this.phase !== 'playing') { this.updateCamera(dt); return; }
     this.updateOrbitals(dt);
     this.updateHelpers(dt);
+    this.updateMines(dt);
     this.updateWeapons(dt);
     this.updateCamera(dt);
 
@@ -1474,6 +1480,7 @@ export class Game {
 
   private die() {
     this.hp = 0;
+    if (this.coop) this.send('dead');
 
     // Co-op: a fallen player keeps watching — the run only ends once everyone
     // is down. Defeating the next boss brings them back with 3s immunity.
@@ -1647,7 +1654,7 @@ export class Game {
           p.crit = Math.random() < st.crit;
           if (p.crit) p.dmg *= st.critd;
           p.hits.length = 0; p.bounced = st.ricochet + (w.id === 'disc' ? st.circleGyro : 0); p.split = st.bloom;
-          p.trail = 0;
+          p.trail = 0; p.owner = this.selfId;
         }
       }
       this.fx.burst(ox, oy, w.id === 'shell' ? 6 : 2, col, { spd: 140, size: 2.4, life: 0.16, dir: baseA, spread: 0.7 });
@@ -1719,7 +1726,7 @@ export class Game {
             this.damageEnemy(e, p.dmg, p.crit, Math.cos(a) * 120 * st.knock, Math.sin(a) * 120 * st.knock);
             p.hits.push(hitId);
             this.fx.burst(p.x, p.y, 4, p.color, { spd: 190, size: 2.6, life: 0.24, dir: a + Math.PI, spread: 1.6 });
-            if (p.aoe > 0) { this.explode(p.x, p.y, p.aoe, p.dmg * 0.85, p.color); dead = true; break; }
+            if (p.aoe > 0) { this.explode(p.x, p.y, p.aoe, p.dmg * 0.85, p.color, byOf(p)); dead = true; break; }
             if (p.pierce > 0) { p.pierce--; }
             else { dead = true; break; }
           }
@@ -1728,7 +1735,7 @@ export class Game {
 
       if (off) dead = true;
       if (dead) {
-        if (p.aoe > 0 && p.life <= 0) this.explode(p.x, p.y, p.aoe, p.dmg * 0.85, p.color);
+        if (p.aoe > 0 && p.life <= 0) this.explode(p.x, p.y, p.aoe, p.dmg * 0.85, p.color, byOf(p));
         if (p.split > 0 && !off) {
           p.split--;
           for (let k = 0; k < 4; k++) {
@@ -1741,7 +1748,7 @@ export class Game {
             np.r = Math.max(3, p.r * 0.55); np.dmg = p.dmg * 0.5;
             np.pierce = 0; np.life = 0.4; np.kind = 'bullet'; np.color = p.color;
             np.rot = a; np.spin = 10; np.homing = st.homing; np.aoe = 0; np.crit = false;
-            np.hits.length = 0; np.bounced = 0; np.split = 0; np.trail = 0;
+            np.hits.length = 0; np.bounced = 0; np.split = 0; np.trail = 0; np.owner = p.owner;
           }
         }
         if (p.bounced > 0 && !off) {
@@ -1761,7 +1768,7 @@ export class Game {
     }
   }
 
-  private explode(x: number, y: number, r: number, dmg: number, color: string) {
+  private explode(x: number, y: number, r: number, dmg: number, color: string, by = '') {
     if (this._dmgDepth >= Game.MAX_CASCADE || this.effectBudget <= 0) return;
     this.fx.ring(x, y, r * 0.2, r, 0.3, 6, color);
     this.fx.burst(x, y, 16, color, { spd: r * 3.4, size: 3.4, life: 0.4, drag: 0.84 });
@@ -1774,7 +1781,7 @@ export class Game {
         const dx = e.x - x, dy = e.y - y;
         if (Math.hypot(dx, dy) < r + e.r) {
           const a = Math.atan2(dy, dx);
-          this.damageEnemy(e, dmg, false, Math.cos(a) * 200, Math.sin(a) * 200, 1);
+          this.damageEnemy(e, dmg, false, Math.cos(a) * 200, Math.sin(a) * 200, 1, by);
         }
       }
     } finally {
@@ -1998,9 +2005,10 @@ export class Game {
       if (!e.active) continue;
       const oldX = e.x, oldY = e.y;
       if (e.frozen > 0) { e.frozen -= dt; }
-      const slowed = (slowField > 0 && Math.hypot(e.x - this.px, e.y - this.py) < 165) ? 1 - slowField : 1;
+      this.setFocus(e);
+      const slowed = (slowField > 0 && Math.hypot(e.x - this.focX, e.y - this.focY) < 165) ? 1 - slowField : 1;
       const spd = e.speed * slowed * (e.frozen > 0 ? 0.12 : 1);
-      const dx = this.px - e.x, dy = this.py - e.y;
+      const dx = this.focX - e.x, dy = this.focY - e.y;
       const dist = Math.hypot(dx, dy) || 1;
       const ux = dx / dist, uy = dy / dist;
       e.rot += e.spin * dt;
@@ -2011,7 +2019,7 @@ export class Game {
         e.burn -= dt;
         e.hp -= e.burnDps * dt;
         if (Math.random() < dt * 8) this.fx.burst(e.x, e.y, 1, '#ff7a45', { spd: 40, size: 2, life: 0.25, drag: 0.9 });
-        if (e.hp <= 0) { this.killEnemy(e); continue; }
+        if (e.hp <= 0) { this.killEnemy(e, ''); continue; }
       }
       if (e.poison > 0) {
         e.poison -= dt;
@@ -2149,10 +2157,12 @@ export class Game {
 
       // contact with player
       const cr = e.r + this.pr - 3;
-      if (segmentDistanceSq(this.px, this.py, oldX, oldY, e.x, e.y) < cr * cr) {
+      const touchX = this.focPeer ? this.focX : this.px;
+      const touchY = this.focPeer ? this.focY : this.py;
+      if (segmentDistanceSq(touchX, touchY, oldX, oldY, e.x, e.y) < cr * cr) {
         if (e.hitCd <= 0) {
           e.hitCd = 0.55;
-          this.hurtPlayer(e.dmg, e.x, e.y);
+          this.hurtFocus(e.dmg, e.x, e.y);
           if (st.thorns > 0) this.damageEnemy(e, st.thorns, false, -ux * 200, -uy * 200);
           const a = Math.atan2(e.y - this.py, e.x - this.px);
           e.vx += Math.cos(a) * 210; e.vy += Math.sin(a) * 210;
@@ -2196,9 +2206,22 @@ export class Game {
     return best;
   }
 
-  private damageEnemy(e: Enemy, dmg: number, crit: boolean, kx: number, ky: number, chainDepth = 0) {
+  private damageEnemy(e: Enemy, dmg: number, crit: boolean, kx: number, ky: number, chainDepth = 0, by = '') {
     if (!e.active || e.hp <= 0 || !Number.isFinite(dmg) || dmg <= 0) return;
     if (chainDepth > 0 && this.effectBudget-- <= 0) return;
+    // Guests never own an enemy: show the feedback and let the host resolve it.
+    if (!this.isHost) {
+      if (chainDepth > 0) return;
+      e.flash = 0.14;
+      e.hp = Math.max(0, e.hp - dmg);
+      if (dmg >= 14 || crit) {
+        this.fx.text(e.x, e.y - e.r - 6, String(Math.round(dmg)), crit ? '#ffe066' : '#ffffff', crit ? 17 : 13);
+        this.fx.burst(e.x, e.y, 4, crit ? '#ffe066' : '#ffffff', { spd: 170, size: 2.4, life: 0.25 });
+      }
+      sfx.hit();
+      this.reportHit(e, dmg, crit);
+      return;
+    }
     const st = this.stats!;
     const primary = chainDepth === 0;
     const sourceId = e.id, sourceX = e.x, sourceY = e.y;
@@ -2254,12 +2277,12 @@ export class Game {
       this.fx.text(e.x, e.y - e.r - 4, Math.round(d).toString(), '#ffffff', 13);
     }
     sfx.hit();
-    if (e.hp <= 0) this.killEnemy(e);
+    if (e.hp <= 0) this.killEnemy(e, by);
 
     // Secondary hits cannot start fresh proc trees. Each lightning cast visits
     // an enemy only once, and all secondary work shares a bounded frame budget.
     if (!primary) return;
-    if (st.explode > 0 && Math.random() < 0.15 * st.explode) this.explode(sourceX, sourceY, 46 * st.aoe, d * 0.6, '#ffb347');
+    if (st.explode > 0 && Math.random() < 0.15 * st.explode) this.explode(sourceX, sourceY, 46 * st.aoe, d * 0.6, '#ffb347', by);
     if (st.shock > 0 || st.chainhit > 0) {
       const visited = new Set<number>([sourceId]);
       const jumps = Math.min(8, st.shock + st.chainhit + st.heptagonRelay);
@@ -2272,24 +2295,26 @@ export class Game {
         const nx = next.x, ny = next.y;
         this.fx.lightning(x, y, nx, ny, '#c4b5fd');
         const power = d * 0.45 * st.shockpow * (1 + st.heptagonCharge * 0.15) * Math.pow(0.75, i);
-        this.damageEnemy(next, power, false, 0, 0, 1);
+        this.damageEnemy(next, power, false, 0, 0, 1, by);
         x = nx; y = ny;
       }
     }
   }
 
-  private killEnemy(enemy: Enemy) {
+  private killEnemy(enemy: Enemy, by = '') {
     if (!enemy.active) return;
     // Snapshot before freeing the pool slot: death effects can spawn new foes.
     const e = { ...enemy };
     enemy.active = false;
     enemy.hp = 0;
     const st = this.stats!;
-    this.kills++;
-    const comboMul = 1 + Math.min(5, this.combo * 0.06 * (1 + st.comboPow * 0.5));
+    const scorer = by || this.selfId;
+    const mine = !this.coop || scorer === this.selfId;
+    if (mine) this.kills++;
+    const comboMul = mine ? 1 + Math.min(5, this.combo * 0.06 * (1 + st.comboPow * 0.5)) : 1;
     const gain = e.score * comboMul * st.scoreMul;
-    this.score += gain;
-    this.combo++;
+    if (mine) this.score += gain; else this.creditPeerScore(scorer, gain);
+    if (mine) this.combo++;
     this.comboT = 2.1 * (1 + st.comboPow * 0.5);
     if (this.combo > this.bestCombo) this.bestCombo = this.combo;
 
@@ -2298,6 +2323,8 @@ export class Game {
     });
     this.fx.ring(e.x, e.y, e.r * 0.4, e.r * 2.3, 0.28, 3, e.def.color);
     if (e.def.boss) {
+      this.celebrateBossKill();
+      if (this.isHost) this.send('boss');
       this.fx.addShake(24);
       this.fx.doFlash('#ffffff', 0.5, 0.35);
       this.fx.hitStop = 0.14;
@@ -2305,7 +2332,6 @@ export class Game {
       this.banner(tr(this.lang, 'bnr_bossDown', { name: enemyName(this.lang, e.def.id, e.def.name) }), 1.8);
       for (const b of this.ebullets) b.active = false;
       for (const h of this.hazards) h.active = false;
-      this.revivePeers();
     } else {
       this.fx.addShake(Math.min(4, 1 + e.r * 0.08));
       sfx.kill();
@@ -2331,7 +2357,7 @@ export class Game {
     }
 
     if (st.regenkill > 0) this.hp = Math.min(this.maxHp, this.hp + st.regenkill);
-    if (st.deathbomb > 0) this.explode(e.x, e.y, 60 * st.deathbomb * st.aoe, e.maxHp * 0.18 + 8, '#ff9a3c');
+    if (st.deathbomb > 0) this.explode(e.x, e.y, 60 * st.deathbomb * st.aoe, e.maxHp * 0.18 + 8, '#ff9a3c', by);
 
     if (e.def.id === 'epentagon') {
       for (let i = 0; i < 2; i++) {
@@ -2346,6 +2372,7 @@ export class Game {
       const p = this.pickups[i];
       if (p.active) continue;
       p.active = true; p.x = x; p.y = y; p.v = v; p.heal = heal; p.life = 17;
+      p.gid = this.gid++; p.mine = this.selfId;
       const a = Math.random() * 6.28;
       p.vx = Math.cos(a) * rnd(30, 110); p.vy = Math.sin(a) * rnd(30, 110);
       return;
@@ -2376,6 +2403,8 @@ export class Game {
       p.x += p.vx * dt; p.y += p.vy * dt;
       if (d < this.pr + 8) {
         p.active = false;
+        // Co-op gems are shared floor loot: tell the host to remove this one.
+        if (this.coop && !this.isHost && p.mine !== this.selfId) this.send('claim', { id: p.gid });
         if (p.heal) {
           this.hp = Math.min(this.maxHp, this.hp + this.maxHp * 0.12 * (1 + st.fieldMedicine));
           this.fx.text(this.px, this.py - 28, '+' + tr(this.lang, 'hp'), '#7dfcd6', 15);
@@ -2386,18 +2415,8 @@ export class Game {
             this.fx.text(this.px, this.py - 30, '+' + Math.round(p.v) + ' ' + tr(this.lang, 'xpShort'), '#5ef07a', 14);
             this.fx.ring(this.px, this.py, 8, 44, 0.26, 3, '#5ef07a');
           }
-          // Co-op: the nearest living partner shares this gem's worth, so each
-          // player's experience bar fills at its own pace.
-          if (this.coop && this.peers.length) {
-            let best: Peer | null = null;
-            let bestD = Infinity;
-            for (const peer of this.peers) {
-              if (!peer.alive) continue;
-              const pd = Math.hypot(peer.x - p.x, peer.y - p.y);
-              if (pd < bestD) { bestD = pd; best = peer; }
-            }
-            if (best) this.creditPeerXP(best.id, p.v);
-          }
+          // Co-op: every player levels from their own collection, so the
+          // partner watching you gets a share too (they claim it on their side).
         }
         this.fx.burst(p.x, p.y, 3, p.heal ? '#8affc0' : '#5ef07a', { spd: 110, size: 2.4, life: 0.24 });
         sfx.pickup();
@@ -2449,11 +2468,11 @@ export class Game {
     this.rollChoices();
     if (this.choices.length === 0) { this.score += 250 * this.stats!.scoreMul; return; }
     this.phase = 'levelup';
-    if (this.coop) {
-      if (!this.chooserId) { this.chooserId = this.selfId; this.chooserName = this.selfName; }
-    } else {
+    if (!this.chooserId) {
       this.chooserId = this.selfId;
       this.chooserName = this.selfName;
+      this.picker = { name: this.selfName, id: this.selfId, cards: this.pickerCards(), chosen: '' };
+      if (this.coop && !this.isHost) this.send('lvl', { name: this.selfName, cards: this.picker.cards });
     }
     this.push();
   }
@@ -2831,7 +2850,7 @@ export class Game {
   private dropMine(x: number, y: number, delay = 0.35) {
     const m = this.freeMine();
     if (!m) return;
-    m.active = true; m.x = x; m.y = y; m.t = 0; m.armed = delay;
+    m.active = true; m.x = x; m.y = y; m.t = 0; m.armed = delay; m.own = this.selfId;
     m.r = 52 * this.stats!.aoe; m.dmg = 20 * this.stats!.dmg;
     this.fx.burst(x, y, 4, '#ffd166', { spd: 70, size: 2.4, life: 0.3 });
   }
@@ -2844,7 +2863,7 @@ export class Game {
       for (const e of this.enemies) {
         if (!e.active) continue;
         if (Math.hypot(e.x - m.x, e.y - m.y) < e.r + 16) {
-          this.explode(m.x, m.y, m.r, m.dmg, '#ffd166');
+          this.explode(m.x, m.y, m.r, m.dmg, '#ffd166', m.own);
           m.active = false;
           break;
         }
@@ -2986,7 +3005,10 @@ export class Game {
       paused: this.phase === 'paused',
       coinsEarned: this.coinsEarned,
       coop: this.coop,
-      isGuest: this.isGuest,
+      isHost: this.isHost,
+      netKind: this.coop ? this.remoteKind : 'solo',
+      picker: this.picker,
+      partnerScore: this.peers.reduce((a, p) => a + Math.round(p.score), 0),
       selfId: this.selfId,
       countdown: this.countdown,
       chooserId: this.chooserId,
