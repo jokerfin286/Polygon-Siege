@@ -62,10 +62,9 @@ export function LangToggle({ lang, onChange, className = '' }: { lang: Lang; onC
 
 /* ------------------------------------------------------- */
 
-export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang, onGuide, onMultiplayer }: {
+export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang, onGuide, onCoop }: {
   lang: Lang; best: number; scores: ScoreRow[]; coins: number;
-  onPlay: () => void; onShop: () => void; onLang: (l: Lang) => void; onGuide: () => void;
-  onMultiplayer: () => void;
+  onPlay: () => void; onShop: () => void; onLang: (l: Lang) => void; onGuide: () => void; onCoop: () => void;
 }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -98,19 +97,18 @@ export function StartScreen({ lang, best, scores, coins, onPlay, onShop, onLang,
               {best > 0 ? t(lang, 'best', { n: best.toLocaleString() }) : t(lang, 'firstRun')}
             </span>
           </button>
+          <button
+            onClick={onCoop}
+            className="w-full max-w-xs rounded-2xl border border-violet-300/50 bg-gradient-to-b from-violet-500/25 to-violet-700/10 px-8 py-3 font-display text-base font-black tracking-widest text-violet-100 transition active:scale-[0.97] hover:from-violet-400/35"
+          >
+            🛰 {t(lang, 'mp_online')}
+          </button>
           <div className="flex flex-wrap items-center justify-center gap-2">
             <button
               onClick={onShop}
               className="flex items-center gap-2 rounded-2xl border border-amber-400/40 bg-amber-400/10 px-5 py-2.5 font-display text-sm font-bold tracking-widest text-amber-200 transition active:scale-95 hover:bg-amber-400/20"
             >
               {t(lang, 'armory')}
-            </button>
-            <button
-              onClick={onMultiplayer}
-              className="flex items-center gap-2 rounded-2xl border border-violet-400/50 bg-violet-500/15 px-5 py-2.5 font-display text-sm font-bold tracking-widest text-violet-100 transition active:scale-95 hover:bg-violet-500/25"
-            >
-              <span className="flex h-4 w-4 items-center justify-center rounded-full border border-violet-200/70 text-[9px] leading-none">●</span>
-              {t(lang, 'multiplayer')}
             </button>
             <div className="flex items-center gap-1.5 rounded-2xl border border-white/10 bg-black/30 px-4 py-2.5">
               <span className="text-base">🪙</span>
