@@ -453,21 +453,6 @@ export function PauseScreen({ lang, st, onResume, onRestart, onQuit, onGuide }: 
           </div>
         </div>
 
-        {/* Co-op: show every partner's build too */}
-        {st.coop && st.peers.length > 0 && st.peers.map((peer) => (
-          <div key={peer.id} className="mt-4">
-            <div className="flex items-baseline justify-between border-b border-white/10 pb-1">
-              <h3 className="font-display text-xs tracking-[0.25em]" style={{ color: peer.color }}>
-                {peer.name} · {t(lang, 'lv')} {peer.level}
-              </h3>
-              <span className="text-[10px] text-slate-500">{t(lang, 'picked', { n: Object.keys(peer.owned || {}).length })}</span>
-            </div>
-            <div className="mt-2.5">
-              <UpgradeList lang={lang} owned={peer.owned || {}} />
-            </div>
-          </div>
-        ))}
-
         <div className="mt-5 space-y-2">
           <button onClick={onResume} className="w-full rounded-xl border border-cyan-300/50 bg-cyan-400/20 py-3 font-display font-bold tracking-widest text-cyan-100 active:scale-[0.98]">{t(lang, 'resume')}</button>
           <button onClick={onGuide} className="w-full rounded-xl border border-white/15 py-2.5 text-xs tracking-widest text-cyan-200 hover:bg-white/5">{t(lang, 'fieldGuide')}</button>

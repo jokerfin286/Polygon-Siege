@@ -13,7 +13,7 @@ import { loadLang, saveLang, t, type Lang } from './i18n';
 
 const INITIAL: PublicState = {
   phase: 'menu', score: 0, best: 0, level: 1, kills: 0, time: 0, hp: 100, maxHp: 100,
-  shapeId: 'circle', weapons: ['disc'], choices: [], partnerChoices: [], rerolls: 0, wave: 1, combo: 0, owned: {}, paused: false, coinsEarned: 0,
+  shapeId: 'circle', weapons: ['disc'], choices: [], rerolls: 0, wave: 1, combo: 0, owned: {}, paused: false, coinsEarned: 0,
   coop: false, isGuest: false, selfId: 'local', countdown: 0,
   chooserId: '', chooserName: '', xp: 0, xpNeed: 8, peers: [],
 };
@@ -98,12 +98,7 @@ export default function App() {
     setLobbyOpen(false);
   }, [stopNet]);
 
-  /**
-   * Wire the per-run channel. The model is strictly host-authoritative:
-   *  - HOST: receives each guest's raw input + action requests, simulates the
-   *    whole world, and streams 30Hz snapshots to everyone.
-   *  - GUEST: streams its input to the host and renders the snapshots.
-   */
+  /** Wire the per-run channel used for snapshots, movement, shooting and level-ups. */
   const openRunChannel = useCallback((code: string, asHost: boolean) => {
     runBus.current?.close();
     const bus = new Bus(runTopic(code));
@@ -115,29 +110,44 @@ export default function App() {
       bus.on((msg) => {
         const game = gameRef.current;
         if (!game) return;
-        if (msg.type === 'input') {
-          game.applyGuestInput(msg as never);
-        } else if (msg.type === 'action') {
-          const who = String(msg.who);
-          switch (String(msg.action)) {
-            case 'pick': game.peerPick(who, String(msg.key)); break;
-            case 'reroll': game.peerReroll(who); break;
-            case 'pause': game.netPause(true); break;
-            case 'resume': game.netPause(false); break;
-            case 'dash': { const p = game.peers.find((x) => x.id === who); if (p) p.inDash = true; break; }
-          }
+        if (msg.type === 'playerSync') {
+          game.updatePeerFromNet(msg as never);
+        } else if (msg.type === 'enemyHit') {
+          game.applyNetHit(Number(msg.id), Number(msg.dmg), Boolean(msg.crit), Number(msg.kx), Number(msg.ky));
+        } else if (msg.type === 'collectPickup') {
+          const p = game.pickups.find((item) => item.active && Math.hypot(item.x - Number(msg.x), item.y - Number(msg.y)) < 40);
+          if (p) p.active = false;
+        } else if (msg.type === 'levelUpRequest') {
+          game.pauseForPeerLevelUp(String(msg.who), String(msg.name), (msg.choices as never) || []);
+          bus.send('pauseForLevelUp', { who: msg.who, name: msg.name, choices: msg.choices });
+        } else if (msg.type === 'levelUpDone') {
+          game.resumeFromPeerLevelUp(String(msg.who));
+          bus.send('resumeFromLevelUp', { who: msg.who, key: msg.key });
         }
       });
-      if (g) g.onSnapshot = (snap) => bus.send('snap', { snap });
+
+      if (g) {
+        g.onSnapshot = (snap) => bus.send('snap', { snap });
+      }
     } else {
       bus.on((msg) => {
         const game = gameRef.current;
-        if (!game || msg.type !== 'snap') return;
-        game.applySnapshot(msg.snap as never);
+        if (!game) return;
+        if (msg.type === 'snap') {
+          game.applySnapshot(msg.snap as never);
+        } else if (msg.type === 'pauseForLevelUp') {
+          game.pauseForPeerLevelUp(String(msg.who), String(msg.name), (msg.choices as never) || []);
+        } else if (msg.type === 'resumeFromLevelUp') {
+          game.resumeFromPeerLevelUp(String(msg.who));
+        }
       });
+
       if (g) {
-        g.onGuestInput = (input) => bus.send('input', input as never);
-        g.onGuestAction = (action, payload) => bus.send('action', { who: selfNetId.current, action, ...payload });
+        g.onGuestSync = (sync) => bus.send('playerSync', sync as never);
+        g.onDamageEnemyNet = (id, dmg, crit, kx, ky) => bus.send('enemyHit', { id, dmg, crit, kx, ky });
+        g.onCollectPickupNet = (x, y, heal, v) => bus.send('collectPickup', { x, y, heal, v });
+        g.onPeerLevelUpRequest = (choices) => bus.send('levelUpRequest', { who: selfNetId.current, name: nicknameRef.current, choices });
+        g.onPeerLevelUpDone = (key) => bus.send('levelUpDone', { who: selfNetId.current, key });
       }
     }
   }, []);
@@ -374,6 +384,16 @@ export default function App() {
     lobbyBus.current?.close();
   }, []);
 
+  /* guest: forward upgrade choices to the host over the run channel */
+  useEffect(() => {
+    const g = gameRef.current;
+    if (!g) return;
+    g.onPickRequest = (key: string) => {
+      runBus.current?.send('pick', { key, who: selfNetId.current });
+    };
+    return () => { g.onPickRequest = null; };
+  }, [lobbyOpen]);
+
   /* ---------------- boot: game + loop + input ---------------- */
   useEffect(() => {
     setBestCache(loadBest());
@@ -572,7 +592,12 @@ export default function App() {
     setLobbyStep('entry');
   }, [stopNet]);
 
-  const pick = useCallback((k: string) => { gameRef.current?.pick(k); }, []);
+  const pick = useCallback((k: string) => {
+    const g = gameRef.current;
+    if (!g) return;
+    if (g.coop && g.isGuest) g.requestPick(k);
+    else g.pick(k);
+  }, []);
   const reroll = useCallback(() => { gameRef.current?.reroll(); }, []);
   const dash = useCallback(() => { gameRef.current?.tryDash(); }, []);
 
