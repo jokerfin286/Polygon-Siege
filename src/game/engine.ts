@@ -59,89 +59,6 @@ interface Hazard {
   delay: number; windup: number; life: number; dmg: number; color: string;
 }
 
-/** A cooperative partner driven by an authoritative snapshot from their tab. */
-export interface Peer {
-  id: string;
-  name: string;
-  color: string;
-  x: number; y: number;
-  tx: number; ty: number;      // latest network target position
-  vx: number; vy: number;
-  hp: number; maxHp: number;
-  alive: boolean;
-  invuln: number;
-  level: number;
-  xp: number; xpNeed: number;
-  score: number; kills: number;
-  shape: string;
-  fireCd: number;
-  lastSeen: number;
-  revived: number;             // seconds of revival immunity left
-  respawnT: number;
-}
-
-/** Compact per-frame description of one projectile for the wire. */
-export interface ProjSnap {
-  x: number; y: number; vx: number; vy: number; r: number;
-  c: string; k: number;
-}
-
-export interface Snapshot {
-  t: number;
-  elapsed: number;
-  wave: number;
-  score: number;
-  phase: Phase;
-  countdown: number;
-  chooser: string;
-  chooserName: string;
-  choices?: Choice[];
-  banner: string;
-  bannerT: number;
-  me: { x: number; y: number; hp: number; maxHp: number; level: number; alive: boolean };
-  peers: Array<Omit<Peer, 'tx' | 'ty' | 'lastSeen' | 'fireCd' | 'respawnT'>>;
-  enemies: Array<{
-    id: number;
-    x: number;
-    y: number;
-    r: number;
-    s: number;
-    hp: number;
-    maxHp: number;
-    rot: number;
-    col: string;
-    boss: boolean;
-    frozen: number;
-    burn: number;
-    poison: number;
-  }>;
-  hazards: Array<{ x: number; y: number; r: number; delay: number; windup: number; color: string }>;
-  ebullets?: Array<{ x: number; y: number; vx: number; vy: number; r: number; color: string; kind: number }>;
-  shots: ProjSnap[];
-  gems: Array<{ x: number; y: number; v: number; heal: boolean }>;
-}
-
-export interface GuestSyncData {
-  id: string;
-  name: string;
-  color: string;
-  shape: string;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  aimA: number;
-  hp: number;
-  maxHp: number;
-  alive: boolean;
-  level: number;
-  xp: number;
-  xpNeed: number;
-  score: number;
-  kills: number;
-  weapons: WeaponId[];
-}
-
 export interface PublicState {
   phase: Phase;
   score: number;
@@ -154,27 +71,12 @@ export interface PublicState {
   shapeId: string;
   weapons: WeaponId[];
   choices: Choice[];
-  partnerChoices?: Choice[];
   rerolls: number;
   wave: number;
   combo: number;
   owned: Record<string, number>;
   paused: boolean;
   coinsEarned: number;
-  // cooperative session
-  coop: boolean;
-  isGuest: boolean;
-  selfId: string;
-  countdown: number;
-  chooserId: string;
-  chooserName: string;
-  xp: number;
-  xpNeed: number;
-  peers: Array<{
-    id: string; name: string; color: string;
-    hp: number; maxHp: number; alive: boolean;
-    level: number; score: number; invuln: number; revived: number;
-  }>;
 }
 
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
@@ -260,44 +162,6 @@ export class Game {
   timeScale = 1; slowT = 0;
   bannerText = ''; bannerT = 0;
 
-  /* ---------------- cooperative multiplayer ---------------- */
-  /** True once a lobby session is driving this instance. */
-  coop = false;
-  /** Guests render host snapshots instead of simulating locally. */
-  isGuest = false;
-  selfId = 'local';
-  selfName = 'PLAYER';
-  selfColor = '#38f5e0';
-  /** Co-op: this player is dead but the match continues — they only spectate. */
-  downed = false;
-  peers: Peer[] = [];
-  /** Who is currently choosing an upgrade (blocks the run for everyone). */
-  chooserId = '';
-  chooserName = '';
-  countdown = 0;
-  /** Set by the host so the shell can push a snapshot out on the wire. */
-  onSnapshot: ((snap: Snapshot) => void) | null = null;
-  /** Set by a guest so the shell can ask the host to apply an upgrade. */
-  onPickRequest: ((key: string) => void) | null = null;
-  onGuestSync: ((sync: GuestSyncData) => void) | null = null;
-  onDamageEnemyNet: ((enemyId: number, dmg: number, crit: boolean, kx: number, ky: number) => void) | null = null;
-  onCollectPickupNet: ((x: number, y: number, heal: boolean, v: number) => void) | null = null;
-  onPeerLevelUpRequest: ((choices: Choice[]) => void) | null = null;
-  onPeerLevelUpDone: ((key: string) => void) | null = null;
-  partnerChoices: Choice[] = [];
-  private snapT = 0;
-  private guestSyncT = 0;
-  // Guest-side interpolation buffer: hold the two most recent snapshots and
-  // render enemies/projectiles at a fixed delay so motion stays perfectly
-  // smooth between the ~20Hz packets from the host.
-  private snapPrev: Snapshot | null = null;
-  private snapNext: Snapshot | null = null;
-  private snapPrevAt = 0;
-  private snapNextAt = 0;
-  /** Wall-clock seconds since the game object was created (interp timing). */
-  private elapsedReal = 0;
-  private static readonly INTERP_DELAY = 0.1; // render 100ms in the past
-
   // background
   stars: { x: number; y: number; z: number }[] = [];
 
@@ -311,7 +175,7 @@ export class Game {
     });
     for (let i = 0; i < 320; i++) this.ebullets.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, r: 5, dmg: 1, life: 0, color: '#f87171', kind: 0, rot: 0 });
     for (let i = 0; i < 130; i++) this.enemies.push(this.blankEnemy());
-    for (let i = 0; i < 800; i++) this.pickups.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, v: 1, life: 0, heal: false });
+    for (let i = 0; i < 260; i++) this.pickups.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, v: 1, life: 0, heal: false });
     for (let i = 0; i < 26; i++) this.orbitals.push({ active: false, angle: 0, dist: 0, r: 10, dmg: 1, color: '#fff', kind: 0, spin: 0, x: 0, y: 0 });
     for (let i = 0; i < 60; i++) this.helpers.push({ active: false, x: 0, y: 0, vx: 0, vy: 0, cd: 0, life: 0, dmg: 1, kind: 0, r: 8, rot: 0, color: '#fff' });
     for (let i = 0; i < 30; i++) this.mines.push({ active: false, x: 0, y: 0, t: 0, r: 0, dmg: 0, armed: 0 });
@@ -417,590 +281,12 @@ export class Game {
     this.hp = this.maxHp;
     this.shield = this.shieldMax; this.shieldT = 0;
     this.centerCamera();
-    this.chooserId = ''; this.chooserName = '';
-    if (this.coop) {
-      for (const p of this.peers) {
-        p.alive = true; p.hp = p.maxHp; p.invuln = 2.5; p.revived = 0;
-        p.x = p.tx = this.px + rnd(-110, 110);
-        p.y = p.ty = this.py + rnd(-110, 110);
-        p.level = 1; p.xp = 0; p.xpNeed = 8; p.score = 0; p.kills = 0;
-      }
-    }
-    this.downed = false;
     this.phase = 'playing';
     this.banner(tr(this.lang, 'bnr_survive'), 1.6);
     this.push();
   }
 
   banner(text: string, t: number) { this.bannerText = text; this.bannerT = t; }
-
-  /* ------------------------------------------------ cooperative multiplayer */
-
-  /** Prepare this instance to host or join a lobby session. */
-  beginCoop(cfg: { selfId: string; selfName: string; selfColor: string; isGuest: boolean }) {
-    this.coop = true;
-    this.isGuest = cfg.isGuest;
-    this.selfId = cfg.selfId;
-    this.selfName = cfg.selfName;
-    this.selfColor = cfg.selfColor;
-    this.peers = [];
-    this.chooserId = '';
-    this.chooserName = '';
-    this.countdown = 0;
-    this.snapT = 0;
-    this.downed = false;
-    this.recompute();
-    if (!cfg.isGuest) this.reset();
-  }
-
-  endCoop() {
-    this.coop = false;
-    this.isGuest = false;
-    this.peers = [];
-    this.chooserId = '';
-    this.chooserName = '';
-    this.countdown = 0;
-    this.phase = 'menu';
-    this.push();
-  }
-
-  /** Merge a roster entry into the simulated peer list (host side). */
-  syncPeers(roster: Array<{ id: string; name: string; color: string }>) {
-    const seen = new Set<string>();
-    for (const info of roster) {
-      if (info.id === this.selfId) continue;
-      seen.add(info.id);
-      let peer = this.peers.find((p) => p.id === info.id);
-      if (!peer) {
-        peer = {
-          id: info.id, name: info.name, color: info.color,
-          x: this.px + rnd(-120, 120), y: this.py + rnd(-120, 120),
-          tx: this.px, ty: this.py, vx: 0, vy: 0,
-          hp: this.maxHp, maxHp: this.maxHp, alive: true, invuln: 2.5,
-          level: 1, xp: 0, xpNeed: 8, score: 0, kills: 0, shape: this.shapeId,
-          fireCd: 0, lastSeen: this.elapsed, revived: 0, respawnT: 0,
-        };
-        this.peers.push(peer);
-        this.fx.ring(peer.x, peer.y, 10, 90, 0.5, 5, peer.color);
-      }
-      peer.name = info.name;
-      peer.color = info.color;
-      peer.lastSeen = this.elapsed;
-    }
-    this.peers = this.peers.filter((p) => seen.has(p.id));
-  }
-
-  /** Guests call this when the host's snapshot arrives. */
-  applySnapshot(snap: Snapshot) {
-    // Authoritative, non-positional state applies immediately.
-    this.wave = snap.wave;
-    this.score = snap.score;
-    this.phase = snap.phase;
-    this.countdown = snap.countdown;
-    this.chooserId = snap.chooser;
-    this.chooserName = snap.chooserName;
-    if (snap.bannerT > this.bannerT || snap.banner !== this.bannerText) {
-      this.bannerText = snap.banner;
-      this.bannerT = snap.bannerT;
-    }
-    if (snap.choices && snap.choices.length > 0) this.partnerChoices = snap.choices;
-
-    // The host owns our HP, death and revival. Obey it — this is what makes a
-    // downed guest stay down and a revived guest come back.
-    const mine = snap.peers.find((p) => p.id === this.selfId);
-    if (mine) {
-      this.hp = mine.hp;
-      this.maxHp = mine.maxHp;
-      this.level = mine.level;
-      this.xp = mine.xp;
-      this.xpNeed = mine.xpNeed;
-      this.score = mine.score;
-      this.invuln = Math.max(this.invuln, mine.invuln);
-      if (!mine.alive && !this.downed) {
-        // Host says we died — enter spectator mode locally.
-        this.downed = true;
-        this.pvx = this.pvy = 0;
-        this.keys.clear();
-        this.fx.doFlash('#ffffff', 0.7, 0.4);
-        this.fx.burst(this.px, this.py, 60, this.selfColor, { spd: 420, size: 5, life: 1 });
-        this.fx.ring(this.px, this.py, 10, 300, 0.8, 8, this.selfColor);
-        this.banner(tr(this.lang, 'spectating'), 2.2);
-        sfx.dead();
-      } else if (mine.alive && this.downed) {
-        // Host revived us (boss kill / revive pickup) — resume playing.
-        this.downed = false;
-        this.hp = mine.hp;
-        this.invuln = Math.max(this.invuln, mine.invuln, 2.5);
-        this.fx.ring(this.px, this.py, 12, 180, 0.7, 7, this.selfColor);
-        this.fx.burst(this.px, this.py, 34, this.selfColor, { spd: 300, size: 4, life: 0.8 });
-        this.banner(tr(this.lang, 'bnr_allyRevived'), 1.6);
-        sfx.levelUp();
-      }
-    }
-
-    // Buffer the snapshot for smooth interpolation instead of hard-snapping.
-    const firstEver = !this.snapNext;
-    this.snapPrev = this.snapNext;
-    this.snapPrevAt = this.snapNextAt;
-    this.snapNext = snap;
-    this.snapNextAt = this.elapsedReal;
-    if (!this.snapPrev) this.snapPrev = snap;
-    // Seed the world immediately on the very first packet so guests never see a
-    // blank arena while the interpolation buffer fills.
-    if (firstEver) { this.elapsed = snap.elapsed; this.interpolateWorld(0); }
-
-    // Partners (host + other guests) — remember previous target for smoothing.
-    for (const info of snap.peers) {
-      if (info.id === this.selfId) continue;
-      let peer = this.peers.find((p) => p.id === info.id);
-      if (!peer) {
-        peer = {
-          ...info,
-          tx: info.x, ty: info.y,
-          vx: 0, vy: 0, fireCd: 0,
-          lastSeen: this.elapsed, respawnT: 0,
-        };
-        this.peers.push(peer);
-      } else {
-        peer.name = info.name;
-        peer.color = info.color;
-        peer.shape = info.shape;
-        peer.tx = info.x; peer.ty = info.y;
-        peer.hp = info.hp; peer.maxHp = info.maxHp;
-        peer.alive = info.alive; peer.invuln = info.invuln;
-        peer.level = info.level; peer.xp = info.xp; peer.xpNeed = info.xpNeed;
-        peer.score = info.score; peer.kills = info.kills;
-        peer.revived = info.revived;
-        peer.lastSeen = this.elapsed;
-      }
-    }
-    // drop peers no longer present
-    const ids = new Set(snap.peers.map((p) => p.id));
-    this.peers = this.peers.filter((p) => ids.has(p.id));
-  }
-
-  /**
-   * Guest-only: render the world at a fixed delay behind the newest snapshot,
-   * blending enemy / projectile / hazard positions between the two most recent
-   * packets. This turns choppy 20Hz network updates into buttery 60fps motion.
-   */
-  private interpolateWorld(dt: number) {
-    void dt;
-    const prev = this.snapPrev;
-    const next = this.snapNext;
-    if (!prev || !next) return;
-
-    // Where along [prev -> next] should "now minus delay" sit?
-    const renderAt = this.elapsedReal - Game.INTERP_DELAY;
-    const span = Math.max(0.0001, this.snapNextAt - this.snapPrevAt);
-    let a = (renderAt - this.snapPrevAt) / span;
-    a = a < 0 ? 0 : a > 1.4 ? 1.4 : a; // small extrapolation tolerance
-
-    this.elapsed = next.elapsed;
-
-    // ----- enemies (match by id so interpolation follows the same foe) -----
-    const prevById = new Map<number, Snapshot['enemies'][number]>();
-    for (const s of prev.enemies) prevById.set(s.id, s);
-
-    let idx = 0;
-    for (const s of next.enemies) {
-      if (idx >= this.enemies.length) break;
-      const e = this.enemies[idx++];
-      const p = prevById.get(s.id);
-      e.active = true;
-      e.id = s.id;
-      if (p) {
-        e.x = p.x + (s.x - p.x) * a;
-        e.y = p.y + (s.y - p.y) * a;
-        e.rot = p.rot + (s.rot - p.rot) * a;
-      } else {
-        e.x = s.x; e.y = s.y; e.rot = s.rot;
-      }
-      e.r = s.r; e.sides = s.s;
-      e.hp = s.hp; e.maxHp = s.maxHp;
-      e.frozen = s.frozen; e.burn = s.burn; e.poison = s.poison;
-      if (!e.def || e.def.color !== s.col) {
-        const match = Object.values(ENEMIES).find((d) => d.color === s.col && Boolean(d.boss) === s.boss);
-        if (match) e.def = match;
-      }
-    }
-    for (let i = idx; i < this.enemies.length; i++) this.enemies[i].active = false;
-
-    // ----- enemy bullets: advance by their own velocity for smoothness -----
-    if (next.ebullets) {
-      let bi = 0;
-      for (const s of next.ebullets) {
-        if (bi >= this.ebullets.length) break;
-        const b = this.ebullets[bi++];
-        const age = this.elapsedReal - this.snapNextAt;
-        b.active = true;
-        b.x = s.x + s.vx * age;
-        b.y = s.y + s.vy * age;
-        b.vx = s.vx; b.vy = s.vy;
-        b.r = s.r; b.color = s.color; b.kind = s.kind;
-      }
-      for (let i = bi; i < this.ebullets.length; i++) this.ebullets[i].active = false;
-    }
-
-    // ----- hazards (telegraphs) -----
-    if (next.hazards) {
-      let hi = 0;
-      for (const s of next.hazards) {
-        if (hi >= this.hazards.length) break;
-        const h = this.hazards[hi++];
-        h.active = true;
-        h.x = s.x; h.y = s.y; h.r = s.r;
-        h.delay = s.delay; h.windup = s.windup; h.color = s.color;
-      }
-      for (let i = hi; i < this.hazards.length; i++) this.hazards[i].active = false;
-    }
-
-    // ----- host-owned pickups (XP + heal orbs on the ground) -----
-    let gi = 0;
-    for (const s of next.gems) {
-      if (gi >= this.pickups.length) break;
-      const p = this.pickups[gi++];
-      p.active = true; p.x = s.x; p.y = s.y; p.v = s.v; p.heal = s.heal;
-      p.life = s.heal ? 18 : Infinity;
-    }
-    for (let i = gi; i < this.pickups.length; i++) this.pickups[i].active = false;
-  }
-
-  buildGuestSync(): GuestSyncData {
-    return {
-      id: this.selfId,
-      name: this.selfName,
-      color: this.selfColor,
-      shape: this.shapeId,
-      x: Math.round(this.px),
-      y: Math.round(this.py),
-      vx: Math.round(this.pvx),
-      vy: Math.round(this.pvy),
-      aimA: +this.aimA.toFixed(2),
-      hp: Math.round(this.hp),
-      maxHp: Math.round(this.maxHp),
-      alive: this.hp > 0,
-      level: this.level,
-      xp: Math.round(this.xp),
-      xpNeed: this.xpNeed,
-      score: Math.round(this.score),
-      kills: this.kills,
-      weapons: this.weapons.slice(),
-    };
-  }
-
-  updatePeerFromNet(data: GuestSyncData) {
-    // The HOST owns hp / alive / level / xp / score for every partner. A guest
-    // only tells us where it is, which way it aims and what shape it wears —
-    // never its own vitals (that would let a downed guest revive itself).
-    let peer = this.peers.find((p) => p.id === data.id);
-    if (!peer) {
-      peer = {
-        id: data.id,
-        name: data.name,
-        color: data.color,
-        shape: data.shape,
-        x: data.x,
-        y: data.y,
-        tx: data.x,
-        ty: data.y,
-        vx: data.vx,
-        vy: data.vy,
-        hp: this.maxHp,
-        maxHp: this.maxHp,
-        alive: true,
-        invuln: 2.5,
-        level: 1,
-        xp: 0,
-        xpNeed: 8,
-        score: 0,
-        kills: 0,
-        fireCd: 0,
-        lastSeen: this.elapsed,
-        revived: 0,
-        respawnT: 0,
-      };
-      this.peers.push(peer);
-    } else {
-      peer.name = data.name;
-      peer.color = data.color;
-      peer.shape = data.shape;
-      peer.tx = data.x;
-      peer.ty = data.y;
-      peer.vx = data.vx;
-      peer.vy = data.vy;
-      peer.lastSeen = this.elapsed;
-    }
-  }
-
-  applyNetHit(id: number, dmg: number, crit: boolean, kx: number, ky: number) {
-    // The guest already folded its crit multiplier into `dmg`, so we apply the
-    // number as-is (crit flag only drives the floating-text/spark visuals).
-    const enemy = this.enemies.find((item) => item.active && item.id === id);
-    if (enemy) {
-      if (crit) this.fx.text(enemy.x, enemy.y - enemy.r - 6, Math.round(dmg).toString(), '#ffe066', 16);
-      this.damageEnemy(enemy, dmg, false, kx, ky);
-    }
-  }
-
-  /** Host side: describe the world compactly for the wire. */
-  buildSnapshot(): Snapshot {
-    const enemies: Snapshot['enemies'] = [];
-    for (const e of this.enemies) {
-      if (!e.active) continue;
-      enemies.push({
-        id: e.id,
-        x: Math.round(e.x), y: Math.round(e.y), r: e.r, s: e.sides,
-        hp: Math.round(e.hp), maxHp: Math.round(e.maxHp), rot: +e.rot.toFixed(2),
-        col: e.def.color, boss: Boolean(e.def.boss),
-        frozen: +e.frozen.toFixed(1), burn: +e.burn.toFixed(1), poison: +e.poison.toFixed(1),
-      });
-    }
-    const shots: ProjSnap[] = [];
-    for (const p of this.projs) {
-      if (!p.active) continue;
-      shots.push({
-        x: Math.round(p.x), y: Math.round(p.y),
-        vx: Math.round(p.vx), vy: Math.round(p.vy),
-        r: +p.r.toFixed(1), c: p.color, k: ['disc', 'bullet', 'orb', 'ring', 'shell', 'missile'].indexOf(p.kind),
-      });
-    }
-    const gems: Snapshot['gems'] = [];
-    for (const p of this.pickups) {
-      if (!p.active) continue;
-      gems.push({ x: Math.round(p.x), y: Math.round(p.y), v: Math.round(p.v), heal: p.heal });
-    }
-    const hazards: Snapshot['hazards'] = [];
-    for (const h of this.hazards) {
-      if (!h.active) continue;
-      hazards.push({ x: Math.round(h.x), y: Math.round(h.y), r: h.r, delay: +h.delay.toFixed(2), windup: +h.windup.toFixed(2), color: h.color });
-    }
-    const ebullets: NonNullable<Snapshot['ebullets']> = [];
-    for (const b of this.ebullets) {
-      if (!b.active) continue;
-      ebullets.push({ x: Math.round(b.x), y: Math.round(b.y), vx: Math.round(b.vx), vy: Math.round(b.vy), r: b.r, color: b.color, kind: b.kind });
-    }
-    return {
-      t: Date.now(),
-      elapsed: +this.elapsed.toFixed(2),
-      wave: this.wave,
-      score: Math.round(this.score),
-      phase: this.phase,
-      countdown: +this.countdown.toFixed(1),
-      chooser: this.chooserId,
-      chooserName: this.chooserName,
-      choices: this.choices,
-      banner: this.bannerText,
-      bannerT: +this.bannerT.toFixed(2),
-      me: {
-        x: Math.round(this.px), y: Math.round(this.py),
-        hp: Math.round(this.hp), maxHp: Math.round(this.maxHp),
-        level: this.level, alive: this.hp > 0,
-      },
-      peers: [
-        // the host is just another partner from the guest's point of view
-        {
-          id: this.selfId, name: this.selfName, color: this.selfColor,
-          x: Math.round(this.px), y: Math.round(this.py),
-          vx: Math.round(this.pvx), vy: Math.round(this.pvy),
-          hp: Math.round(this.hp), maxHp: Math.round(this.maxHp),
-          alive: this.hp > 0, invuln: +this.invuln.toFixed(1),
-          level: this.level, xp: Math.round(this.xp), xpNeed: this.xpNeed,
-          score: Math.round(this.score), kills: this.kills,
-          shape: this.shapeId, revived: 0,
-        },
-        ...this.peers.map((p) => ({
-          id: p.id, name: p.name, color: p.color,
-          x: Math.round(p.x), y: Math.round(p.y),
-          vx: Math.round(p.vx), vy: Math.round(p.vy),
-          hp: Math.round(p.hp), maxHp: Math.round(p.maxHp),
-          alive: p.alive, invuln: +p.invuln.toFixed(1),
-          level: p.level, xp: Math.round(p.xp), xpNeed: p.xpNeed,
-          score: Math.round(p.score), kills: p.kills,
-          shape: p.shape, revived: +p.revived.toFixed(1),
-        })),
-      ],
-      enemies,
-      hazards,
-      ebullets,
-      shots,
-      gems,
-    };
-  }
-
-  /** Host: the 3-2-1 gate that runs before a lobby match begins. */
-  startCountdown(seconds = 3) {
-    this.countdown = seconds;
-    this.phase = 'playing';
-    this.banner(String(Math.ceil(seconds)), 1);
-    this.push();
-  }
-
-  /** Host: a partner died but the run continues — they spectate. */
-  killPeer(id: string) {
-    const peer = this.peers.find((p) => p.id === id);
-    if (!peer) return;
-    peer.alive = false;
-    peer.hp = 0;
-    this.fx.burst(peer.x, peer.y, 40, peer.color, { spd: 300, size: 4, life: 0.8 });
-    this.fx.ring(peer.x, peer.y, 12, 190, 0.6, 6, peer.color);
-    this.banner(tr(this.lang, 'bnr_allyDown', { name: peer.name }), 1.8);
-  }
-
-  /** Host: defeating a boss (or a teammate's revive pickup) restores fallen
-   *  partners with 3s immunity. Runs only when someone actually needs it. */
-  revivePeers() {
-    if (!this.coop) return;
-    const anyoneDown = this.downed || this.hp <= 0 || this.peers.some((p) => !p.alive);
-    if (!anyoneDown) return;
-    let revived = 0;
-
-    // We (the host) might be the one who was spectating.
-    if (this.downed || this.hp <= 0) {
-      this.downed = false;
-      this.hp = this.maxHp;
-      this.invuln = 3;
-      this.px = clamp(this.px, 40, this.worldW - 40);
-      this.py = clamp(this.py, 40, this.worldH - 40);
-      this.fx.ring(this.px, this.py, 12, 170, 0.7, 7, this.selfColor);
-      this.fx.burst(this.px, this.py, 32, this.selfColor, { spd: 280, size: 4, life: 0.8 });
-      revived++;
-    }
-    for (const peer of this.peers) {
-      if (peer.alive) continue;
-      peer.alive = true;
-      peer.hp = peer.maxHp;
-      peer.invuln = 3;
-      peer.revived = 3;
-      peer.x = this.px + rnd(-70, 70);
-      peer.y = this.py + rnd(-70, 70);
-      peer.tx = peer.x; peer.ty = peer.y;
-      this.fx.ring(peer.x, peer.y, 12, 150, 0.7, 7, peer.color);
-      this.fx.burst(peer.x, peer.y, 30, peer.color, { spd: 260, size: 4, life: 0.8 });
-      revived++;
-    }
-    if (revived > 0) {
-      this.banner(tr(this.lang, 'bnr_allyRevived'), 2);
-      this.fx.doFlash('#ffffff', 0.35, 0.3);
-    }
-  }
-
-  /** Host: damage a partner (bullets, hazards, contact). */
-  hurtPeer(id: string, dmg: number) {
-    const peer = this.peers.find((p) => p.id === id);
-    if (!peer || !peer.alive || peer.invuln > 0) return;
-    peer.hp -= Math.max(1, dmg);
-    peer.invuln = 0.7;
-    this.fx.burst(peer.x, peer.y, 10, '#ff6b81', { spd: 200, size: 3, life: 0.35 });
-    if (peer.hp <= 0) this.killPeer(id);
-  }
-
-  /** Host: credit a level-up to a partner so the shared pause can name them. */
-  creditPeerXP(id: string, amount: number) {
-    const peer = this.peers.find((p) => p.id === id);
-    if (!peer || !peer.alive) return;
-    peer.xp += amount;
-    peer.score += amount * 2;
-    while (peer.xp >= peer.xpNeed) {
-      peer.xp -= peer.xpNeed;
-      peer.level++;
-      peer.xpNeed = Math.floor(8 + peer.level * 4.5 + Math.pow(peer.level, 1.6));
-      peer.hp = Math.min(peer.maxHp, peer.hp + peer.maxHp * 0.08);
-      // A partner's level-up pauses the whole run, exactly like our own.
-      if (!this.chooserId) {
-        this.chooserId = peer.id;
-        this.chooserName = peer.name;
-        if (this.phase === 'playing') {
-          this.rollChoices();
-          this.phase = 'levelup';
-          this.push();
-        }
-      }
-    }
-  }
-
-  private updatePeers(dt: number) {
-    for (const peer of this.peers) {
-      if (peer.invuln > 0) peer.invuln -= dt;
-      if (peer.revived > 0) peer.revived -= dt;
-
-      if (this.isGuest) {
-        // Guests only ease toward the authoritative position.
-        const k = Math.min(1, dt * 11);
-        peer.x += (peer.tx - peer.x) * k;
-        peer.y += (peer.ty - peer.y) * k;
-        continue;
-      }
-
-      if (!peer.alive) continue;
-
-      // ease toward the position the partner reported
-      const k = Math.min(1, dt * 9);
-      const dx = peer.tx - peer.x;
-      const dy = peer.ty - peer.y;
-      peer.vx = dx * k / Math.max(dt, 0.0001) * 0.001;
-      peer.vy = dy * k / Math.max(dt, 0.0001) * 0.001;
-      peer.x += dx * k;
-      peer.y += dy * k;
-      peer.x = clamp(peer.x, 10, this.worldW - 10);
-      peer.y = clamp(peer.y, 10, this.worldH - 10);
-
-      // partners draw enemy contact damage just like the local player
-      for (const e of this.enemies) {
-        if (!e.active) continue;
-        const reach = e.r + 22;
-        if ((e.x - peer.x) ** 2 + (e.y - peer.y) ** 2 < reach * reach) {
-          this.hurtPeer(peer.id, e.dmg * 0.55);
-          const a = Math.atan2(peer.y - e.y, peer.x - e.x);
-          e.vx -= Math.cos(a) * 120; e.vy -= Math.sin(a) * 120;
-        }
-      }
-
-      // ...and from enemy bullets / ground hazards
-      for (const b of this.ebullets) {
-        if (!b.active) continue;
-        const rr = 20 + b.r;
-        if ((b.x - peer.x) ** 2 + (b.y - peer.y) ** 2 < rr * rr) {
-          b.active = false;
-          this.hurtPeer(peer.id, b.dmg * 0.5);
-        }
-      }
-      for (const h of this.hazards) {
-        if (!h.active || h.delay > 0) continue;
-        if ((h.x - peer.x) ** 2 + (h.y - peer.y) ** 2 < (h.r + 18) ** 2) {
-          this.hurtPeer(peer.id, h.dmg * 0.5);
-        }
-      }
-
-      // partners fire on the nearest foe with the shared weapon set
-      peer.fireCd -= dt;
-      if (peer.fireCd <= 0) {
-        const target = this.nearestEnemy(peer.x, peer.y, 620);
-        if (target) {
-          peer.fireCd = 0.42;
-          const angle = Math.atan2(target.y - peer.y, target.x - peer.x);
-          const p = this.freeProj();
-          if (p) {
-            const weapon = WEAPONS[this.weapons[0] || 'disc'];
-            const speed = weapon.speed * (this.stats?.pspd || 1);
-            p.active = true;
-            p.x = peer.x; p.y = peer.y;
-            p.vx = Math.cos(angle) * speed; p.vy = Math.sin(angle) * speed;
-            p.r = Math.max(3, weapon.radius * (this.stats?.psize || 1) * 0.85);
-            p.dmg = weapon.dmg * (this.stats?.dmg || 1) * 0.85;
-            p.pierce = 1; p.life = 1.2;
-            p.kind = weapon.kind as Proj['kind'];
-            p.color = peer.color;
-            p.rot = angle; p.spin = 10;
-            p.homing = 0; p.aoe = 0; p.crit = false;
-            p.hits.length = 0; p.bounced = 0; p.split = 0; p.trail = 0;
-          }
-        } else {
-          peer.fireCd = 0.12;
-        }
-      }
-    }
-  }
 
   recompute() {
     this.stats = this.computeStats();
@@ -1204,29 +490,17 @@ export class Game {
     if (!c) return;
     this.applyUpgrade(c.def);
     this.choices = [];
-    this.chooserId = '';
-    this.chooserName = '';
     sfx.buy();
     if (this.pendingLevels > 0 && this.availableChoices().length > 0) {
       this.pendingLevels--;
       this.rollChoices();
       this.phase = 'levelup';
-      if (this.coop) { this.chooserId = this.selfId; this.chooserName = this.selfName; }
       this.push();
     } else {
       this.pendingLevels = 0;
       this.phase = 'playing';
       this.push();
     }
-  }
-
-  /** Guest: ask the host to apply the highlighted card on our behalf. */
-  requestPick(key: string) {
-    if (this.isGuest && this.onPickRequest) {
-      this.onPickRequest(key);
-      return;
-    }
-    this.pick(key);
   }
 
   applyUpgrade(d: UpgDef) {
@@ -1253,41 +527,13 @@ export class Game {
     } else if (d.kind === 'special' && d.id === 'dash') {
       this.hasDash = true;
     }
-    // Co-op: picking the Second Wind revive brings any downed teammates back.
-    if (this.coop && d.stat === 'secondwind' && this.peers.some((p) => !p.alive)) {
-      this.revivePeers();
-    }
     this.recompute();
   }
 
   /* ------------------------------------------------ loop */
 
-  pauseForPeerLevelUp(who: string, name: string, choices: Choice[]) {
-    this.phase = 'levelup';
-    this.chooserId = who;
-    this.chooserName = name;
-    this.partnerChoices = choices;
-    this.push();
-  }
-
-  resumeFromPeerLevelUp(_who: string) {
-    this.phase = 'playing';
-    this.chooserId = '';
-    this.chooserName = '';
-    this.partnerChoices = [];
-    // Team reward drop
-    for (const peer of this.peers) {
-      if (!peer.alive) continue;
-      this.dropPickup(peer.x, peer.y, this.xpNeed * 0.35, false);
-      this.dropPickup(peer.x, peer.y, 0, true);
-    }
-    this.push();
-  }
-
   frame(dtRaw: number) {
     const dt = Math.min(0.05, dtRaw);
-    this.elapsedReal += dt;
-
     if (this.phase === 'playing') {
       let ts = 1;
       if (this.slowT > 0) { ts = 0.35; this.slowT -= dt; }
@@ -1299,17 +545,6 @@ export class Game {
       this.fx.update(dt);
       this.stateT += dt;
       if (this.stateT > 0.2) { this.stateT = 0; this.push(); }
-
-      // Host streams snapshots to partners at 20Hz
-      if (this.coop && !this.isGuest && this.onSnapshot) {
-        this.snapT += dt;
-        if (this.snapT >= 0.05) { this.snapT = 0; this.onSnapshot(this.buildSnapshot()); }
-      }
-      // Guest streams player state to host at 20Hz
-      if (this.coop && this.isGuest && this.onGuestSync) {
-        this.guestSyncT += dt;
-        if (this.guestSyncT >= 0.05) { this.guestSyncT = 0; this.onGuestSync(this.buildGuestSync()); }
-      }
     } else {
       this.fx.update(dt * 0.35);
       if (this.phase === 'dead' || this.phase === 'menu') {
@@ -1320,62 +555,29 @@ export class Game {
 
   private update(dt: number) {
     this.effectBudget = 192;
-
-    // lobby start gate — the run stays frozen until the counter reaches zero
-    if (this.countdown > 0) {
-      const before = Math.ceil(this.countdown);
-      this.countdown = Math.max(0, this.countdown - dt);
-      const after = Math.ceil(this.countdown);
-      if (after !== before) {
-        this.banner(after > 0 ? String(after) : tr(this.lang, 'bnr_fight'), 1);
-        if (after > 0) sfx.select(); else sfx.levelUp();
-      }
-      if (this.countdown > 0) {
-        this.fx.update(0);
-        this.push();
-        return;
-      }
-    }
-
     this.elapsed += dt;
-    if (this.coop) this.updatePeers(dt);
-
-    if (!this.isGuest) {
-      const newWave = Math.floor(this.elapsed / 30) + 1;
-      if (newWave !== this.wave) {
-        this.wave = newWave;
-        this.banner(tr(this.lang, 'bnr_wave', { n: this.wave }), 1.3);
-        sfx.buy();
-      }
+    const newWave = Math.floor(this.elapsed / 30) + 1;
+    if (newWave !== this.wave) {
+      this.wave = newWave;
+      this.banner(tr(this.lang, 'bnr_wave', { n: this.wave }), 1.3);
+      sfx.buy();
     }
     if (this.bannerT > 0) this.bannerT -= dt;
 
-    // BOTH host and guest run player movement and weapon targeting locally!
     this.updatePlayer(dt);
-
-    // Host owns the world simulation and all player HP/damage/death.
-    // Guests keep enemies/hazards/pickups purely as interpolated visuals from
-    // the host snapshot — their HP, death and revival are host-authoritative.
-    if (!this.isGuest) {
-      this.spawnDirector(dt);
-      this.updateEnemies(dt);
-      if (this.phase !== 'playing') return;
-      this.updateMines(dt);
-      this.updateHazards(dt);
-      if (this.phase !== 'playing') return;
-      this.updateEBullets(dt);
-      if (this.phase !== 'playing') return;
-    } else {
-      this.interpolateWorld(dt);
-    }
-
-    // Both host and guest run their own local projectiles + orbitals + helpers
-    // so their shots feel instant. The guest reports its hits to the host.
+    this.spawnDirector(dt);
+    this.updateEnemies(dt);
+    if (this.phase !== 'playing') return;
+    this.updateHazards(dt);
+    if (this.phase !== 'playing') return;
     this.updateProjs(dt);
-    if (!this.isGuest) this.updatePickups(dt);
+    this.updateEBullets(dt);
+    if (this.phase !== 'playing') return;
+    this.updatePickups(dt);
     if (this.phase !== 'playing') { this.updateCamera(dt); return; }
     this.updateOrbitals(dt);
     this.updateHelpers(dt);
+    this.updateMines(dt);
     this.updateWeapons(dt);
     this.updateCamera(dt);
 
@@ -1412,17 +614,6 @@ export class Game {
 
   private updatePlayer(dt: number) {
     const st = this.stats!;
-
-    // Downed spectators drift to a stop and take no further actions.
-    if (this.downed) {
-      this.pvx *= Math.pow(0.85, dt * 60);
-      this.pvy *= Math.pow(0.85, dt * 60);
-      this.px += this.pvx * dt;
-      this.py += this.pvy * dt;
-      this.aimTarget = null;
-      return;
-    }
-
     let ix = 0, iy = 0;
     const k = this.keys;
     if (k.has('a') || k.has('arrowleft')) ix -= 1;
@@ -1521,7 +712,7 @@ export class Game {
   tryDash() { this.wantDash = true; }
 
   private hurtPlayer(dmg: number, sx: number, sy: number) {
-    if (this.downed || this.invuln > 0 || this.phase !== 'playing') return;
+    if (this.invuln > 0 || this.phase !== 'playing') return;
     const st = this.stats!;
     let d = Math.max(1, (dmg - st.armor) * (1 - st.damageReduction));
     if (this.shield > 0) {
@@ -1584,28 +775,7 @@ export class Game {
 
   private die() {
     this.hp = 0;
-
-    // Co-op: a fallen player keeps watching — the run only ends once everyone
-    // is down. Defeating the next boss (or a teammate's revive pickup) brings
-    // them back with 3s immunity. While downed they stop acting entirely.
-    if (this.coop && (this.peers.some((p) => p.alive) || this.isGuest)) {
-      this.downed = true;
-      this.pvx = 0; this.pvy = 0;
-      this.combo = 0; this.comboT = 0;
-      this.keys.clear();
-      this.fx.doFlash('#ffffff', 0.8, 0.45);
-      this.fx.addShake(26);
-      this.fx.burst(this.px, this.py, 70, this.selfColor, { spd: 460, size: 5, life: 1 });
-      this.fx.ring(this.px, this.py, 10, 320, 0.8, 8, this.selfColor);
-      this.banner(tr(this.lang, 'spectating'), 2.2);
-      sfx.dead();
-      this.push();
-      return;
-    }
-
     this.phase = 'dead';
-    this.downed = false;
-    this.invuln = 0;
     this.coinsEarned = Math.max(1, Math.floor((this.score / 100 + this.kills * 0.5) * this.coinMul));
     this.fx.doFlash('#ffffff', 0.9, 0.5);
     this.fx.addShake(30);
@@ -1645,7 +815,6 @@ export class Game {
   }
 
   private updateWeapons(dt: number) {
-    if (this.downed) return;
     this.aimTarget = this.nearestEnemy(this.px, this.py, 1600);
     this.firingTime = this.aimTarget ? Math.min(8, this.firingTime + dt) : 0;
     for (let wi = 0; wi < this.weapons.length; wi++) {
@@ -2313,21 +1482,6 @@ export class Game {
 
   private damageEnemy(e: Enemy, dmg: number, crit: boolean, kx: number, ky: number, chainDepth = 0) {
     if (!e.active || e.hp <= 0 || !Number.isFinite(dmg) || dmg <= 0) return;
-
-    // Guests never own enemy HP. Forward the hit to the host and show instant
-    // local hit feedback; the host applies the real damage and the next
-    // snapshot reflects the authoritative result. This keeps guest shooting
-    // responsive while never desyncing kills, XP or drops.
-    if (this.isGuest) {
-      if (chainDepth === 0 && this.onDamageEnemyNet) {
-        const scaled = dmg * (crit ? (this.stats?.critd || 1.6) : 1);
-        this.onDamageEnemyNet(e.id, scaled, crit, kx, ky);
-        e.flash = 0.12;
-        this.fx.burst(e.x, e.y, 3, crit ? '#ffe066' : '#fff', { spd: 140, size: 2.4, life: 0.2 });
-      }
-      return;
-    }
-
     if (chainDepth > 0 && this.effectBudget-- <= 0) return;
     const st = this.stats!;
     const primary = chainDepth === 0;
@@ -2435,7 +1589,6 @@ export class Game {
       this.banner(tr(this.lang, 'bnr_bossDown', { name: enemyName(this.lang, e.def.id, e.def.name) }), 1.8);
       for (const b of this.ebullets) b.active = false;
       for (const h of this.hazards) h.active = false;
-      this.revivePeers();
     } else {
       this.fx.addShake(Math.min(4, 1 + e.r * 0.08));
       sfx.kill();
@@ -2488,16 +1641,11 @@ export class Game {
     for (let i = 0; i < this.pickups.length; i++) {
       const p = this.pickups[i];
       if (!p.active) continue;
-      // XP gems never expire — they wait on the floor until collected.
-      // Only healing orbs (short-lived by design) keep a timer.
-      if (p.heal) {
-        p.life -= dt;
-        if (p.life <= 0) { p.active = false; continue; }
-      }
+      p.life -= dt;
+      if (p.life <= 0) { p.active = false; continue; }
       const dx = this.px - p.x, dy = this.py - p.y;
       const d = Math.hypot(dx, dy) || 1;
-      // A downed spectator has no magnet and cannot pick anything up.
-      if (!this.downed && d < pr) {
+      if (d < pr) {
         const k = 1 - d / pr;
         const acc = 700 + k * k * 3800;
         p.vx += (dx / d) * acc * dt;
@@ -2505,7 +1653,7 @@ export class Game {
       }
       p.vx *= Math.pow(0.92, dt * 60); p.vy *= Math.pow(0.92, dt * 60);
       p.x += p.vx * dt; p.y += p.vy * dt;
-      if (!this.downed && d < this.pr + 8) {
+      if (d < this.pr + 8) {
         p.active = false;
         if (p.heal) {
           this.hp = Math.min(this.maxHp, this.hp + this.maxHp * 0.12 * (1 + st.fieldMedicine));
@@ -2516,18 +1664,6 @@ export class Game {
           if (p.v >= 30) {
             this.fx.text(this.px, this.py - 30, '+' + Math.round(p.v) + ' ' + tr(this.lang, 'xpShort'), '#5ef07a', 14);
             this.fx.ring(this.px, this.py, 8, 44, 0.26, 3, '#5ef07a');
-          }
-          // Co-op: the nearest living partner shares this gem's worth, so each
-          // player's experience bar fills at its own pace.
-          if (this.coop && this.peers.length) {
-            let best: Peer | null = null;
-            let bestD = Infinity;
-            for (const peer of this.peers) {
-              if (!peer.alive) continue;
-              const pd = Math.hypot(peer.x - p.x, peer.y - p.y);
-              if (pd < bestD) { bestD = pd; best = peer; }
-            }
-            if (best) this.creditPeerXP(best.id, p.v);
           }
         }
         this.fx.burst(p.x, p.y, 3, p.heal ? '#8affc0' : '#5ef07a', { spd: 110, size: 2.4, life: 0.24 });
@@ -2561,31 +1697,10 @@ export class Game {
         void a;
       }
     }
-
-    // Co-op: levelling up knocks a reward loose for each living partner.
-    if (this.coop) {
-      for (const peer of this.peers) {
-        if (!peer.alive) continue;
-        this.dropPickup(peer.x, peer.y, this.xpNeed * 0.35, false);
-        this.dropPickup(peer.x, peer.y, 0, true);
-        this.fx.ring(peer.x, peer.y, 12, 96, 0.55, 5, '#5ef07a');
-        this.fx.text(peer.x, peer.y - 26, tr(this.lang, 'rewardDrop'), '#5ef07a', 13);
-      }
-    }
-    if (this.phase === 'levelup') {
-      this.pendingLevels++;
-      if (this.coop && !this.chooserId) { this.chooserId = this.selfId; this.chooserName = this.selfName; }
-      return;
-    }
+    if (this.phase === 'levelup') { this.pendingLevels++; return; }
     this.rollChoices();
     if (this.choices.length === 0) { this.score += 250 * this.stats!.scoreMul; return; }
     this.phase = 'levelup';
-    if (this.coop) {
-      if (!this.chooserId) { this.chooserId = this.selfId; this.chooserName = this.selfName; }
-    } else {
-      this.chooserId = this.selfId;
-      this.chooserName = this.selfName;
-    }
     this.push();
   }
 
@@ -3116,20 +2231,6 @@ export class Game {
       owned: this.owned,
       paused: this.phase === 'paused',
       coinsEarned: this.coinsEarned,
-      coop: this.coop,
-      isGuest: this.isGuest,
-      selfId: this.selfId,
-      countdown: this.countdown,
-      chooserId: this.chooserId,
-      chooserName: this.chooserName,
-      xp: this.xp,
-      xpNeed: this.xpNeed,
-      peers: this.peers.map((p) => ({
-        id: p.id, name: p.name, color: p.color,
-        hp: Math.max(0, Math.round(p.hp)), maxHp: p.maxHp,
-        alive: p.alive, level: p.level,
-        score: Math.round(p.score), invuln: p.invuln, revived: p.revived,
-      })),
     });
   }
 
